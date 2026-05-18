@@ -1,0 +1,16 @@
+name: sittingducks
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pillow
+  - pytorch
+  - torchvision
+  - pip:
+      - ultralytics
+      - model2vec
+      - huggingface_hub
