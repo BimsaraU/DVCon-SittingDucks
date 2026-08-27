@@ -1,0 +1,44 @@
+## Resource-budget probe: synthesise the accelerator CORE alone.
+##
+## dvcon_top is still a skeleton (no engines wired in), so a map of it reports
+## 4 logic elements -- everything else is stripped as unconnected. This project
+## takes system_top, the systolic array and the engines directly, so the LE and
+## multiplier budget in the migration plan can be checked against a real
+## number instead of an estimate.
+##
+## Not a buildable design: no pins, no top-level I/O that means anything. It
+## exists to answer "does ARRAY_SIZE=16 fit".
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE115F29C7
+set_global_assignment -name TOP_LEVEL_ENTITY system_top
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name SEARCH_PATH "../../rtl/core"
+set_global_assignment -name VERILOG_MACRO "SYNTH_BUDGET=1"
+
+set_parameter -name ARRAY_SIZE 16
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/accel_dma_seq.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/accelerator.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/bram_act_buffer.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/bram_out_buffer.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/bram_weight_buffer.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/buffer_reg.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/control_unit.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/dvc_generic_mux.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/im2col_engine.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/line_buffer.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/pe.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/pe_pair.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/register_bank.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/shift_reg_buffer.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/silu_lut.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/silu_unit.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/system_top.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/systolic_array.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/ucode_engine.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/vector_unit.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/yolo_axi_arbiter.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/yolo_conv_engine.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/yolo_detect_engine.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/yolo_elem_engine.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "../../rtl/core/yolo_layer_sequencer.sv"

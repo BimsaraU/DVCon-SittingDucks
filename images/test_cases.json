@@ -1,0 +1,68 @@
+[
+  {
+    "test_id": 1,
+    "prompt": "something to sleep comfortably on",
+    "image_file": "images/000000000632.jpg",
+    "ground_truth": "bed"
+  },
+  {
+    "test_id": 2,
+    "prompt": "something which can be used to type a document",
+    "image_file": "images/000000002157.jpg",
+    "ground_truth_bbox": "keyboard"
+  },
+  {
+    "test_id": 3,
+    "prompt": "something into which we can pour a drink",
+    "image_file": "images/000000001503.jpg",
+    "ground_truth_bbox": "wine glass"
+  },
+  {
+    "test_id": 4,
+    "prompt": "something to cut a birthday cake",
+    "image_file": "images/000000002592.jpg",
+    "ground_truth_bbox": "knife"
+  },
+  {
+    "test_id": 5,
+    "prompt": "something to sit comfortably on",
+    "image_file": "images/000000004495.jpg",
+    "ground_truth_bbox": "chair"
+  },
+  {
+    "test_id": 6,
+    "prompt": "something which can be used to travel to work",
+    "image_file": "images/000000006723.jpg",
+    "ground_truth_bbox": "car"
+  },
+  {
+    "test_id": 7,
+    "prompt": "something to store and preserve ice cream",
+    "image_file": "images/000000007574.jpg",
+    "ground_truth_bbox": "refrigerator"
+  },
+  {
+    "test_id": 8,
+    "prompt": "something where i can rest and sleep",
+    "image_file": "images/000000007795.jpg",
+    "ground_truth_bbox": "bed"
+  },
+  {
+    "test_id": 9,
+    "prompt": "something onto which we can be pour water",
+    "image_file": "images/000000009400.jpg",
+    "ground_truth_bbox": "cup"
+  },
+  {
+    "test_id": 10,
+    "prompt": "something i can use to drink tea with",
+    "image_file": "images/000000009590.jpg",
+    "ground_truth_bbox": "cup"
+  },
+  {
+    "test_id": 11,
+    "prompt": "the best place to keep a jug full of water",
+    "image_file": "images/000000010092.jpg",
+    "ground_truth_bbox": "table"
+  }
+]

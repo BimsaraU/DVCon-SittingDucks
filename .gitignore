@@ -1,3 +1,54 @@
 *.pt
 *.onnx
 *.ts
+
+# ---------------- Quartus / FPGA build output ----------------
+qrts/quartus/db/
+qrts/quartus/incremental_db/
+qrts/quartus/output_files/
+qrts/quartus/**/db/
+qrts/quartus/**/incremental_db/
+qrts/quartus/**/output_files/
+qrts/quartus/greybox_tmp/
+qrts/quartus/*.qws
+qrts/quartus/*.rpt
+qrts/quartus/*.log
+qrts/quartus/*.smsg
+qrts/quartus/*.qmsg
+qrts/quartus/*.summary
+qrts/quartus/*.sof
+qrts/quartus/*.pof
+qrts/quartus/*.rbf
+qrts/quartus/*.jdi
+qrts/quartus/*.pin
+qrts/quartus/*.done
+qrts/quartus/*.sld
+
+# Qsys generated
+qrts/qsys/**/synthesis/
+qrts/qsys/**/simulation/
+qrts/qsys/**/testbench/
+qrts/qsys/*.sopcinfo
+qrts/qsys/.qsys_edit/
+
+# ---------------- Simulation output ----------------
+qrts/sim/work/
+qrts/sim/w[a-z]*/
+qrts/sim/questa/
+qrts/sim/transcript
+qrts/sim/*.wlf
+qrts/sim/*.vcd
+qrts/sim/*.log
+qrts/xsim.dir/
+qrts/xvlog.log
+qrts/xvlog.pb
+qrts/xelab.log
+qrts/xelab.pb
+qrts/xsim.log
+qrts/webtalk*
+
+# ---------------- Build artifacts ----------------
+qrts/sw/*.exe
+qrts/sw/*.o
+qrts/host/**/*.o
+qrts/host/**/*.exe

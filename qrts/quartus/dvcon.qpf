@@ -1,0 +1,13 @@
+## ============================================================================
+## dvcon.qpf — Quartus project file
+##
+## Quartus Prime Lite 25.1std, which a real synthesis run confirms still
+## supports Cyclone IV E / EP4CE115F29C7.
+##
+## Everything that describes the design lives in dvcon.qsf. This file only
+## names the revision.
+## ============================================================================
+
+QUARTUS_VERSION = "25.1"
+
+PROJECT_REVISION = "dvcon"
