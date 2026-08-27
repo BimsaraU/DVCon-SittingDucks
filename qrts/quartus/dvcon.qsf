@@ -1,0 +1,177 @@
+## ============================================================================
+## dvcon.qsf — Quartus settings for the DE2-115 build
+##
+## Open dvcon.qpf, or from the command line:
+##     cd qrts/quartus
+##     quartus_map dvcon && quartus_fit dvcon && quartus_sta dvcon
+##
+## Quartus Prime Lite. A real Analysis & Synthesis run of this core on
+## 25.1std targeting EP4CE115F29C7 confirms Cyclone IV E is still supported
+## there, so the "later versions dropped it" caution in the migration plan does
+## not apply to 25.1std at least.
+##
+## The .qsf itself has not been run end to end; the evidence above comes from a
+## separate run over the same rtl/core/ files.
+## ============================================================================
+
+## ----------------------------------------------------------------------------
+## Device
+##
+## The board part is marked EP4CE115F29C7N. Quartus does NOT accept that name
+## (Error 125095, "Part name EP4CE115F29C7N is invalid") -- the N is an
+## ordering/package suffix for the RoHS lead-free variant, not a separate
+## fitting target. The tool's device list has EP4CE115F29C7: same die, same C7
+## speed grade, identical timing models. Verified against
+##     get_part_list -family "Cyclone IV E"
+## which returns C7, I7, C8, C8L, I8L, C9L and no N variants at all.
+## ----------------------------------------------------------------------------
+set_global_assignment -name TOP_LEVEL_ENTITY dvcon_top
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 25.1
+set_global_assignment -name LAST_QUARTUS_VERSION "25.1std.0 Lite Edition"
+
+## SystemVerilog_2005 is the ONLY SystemVerilog value Quartus accepts here --
+## it rejects SYSTEMVERILOG_2009 outright:
+##   Info (125076): must include one of "SystemVerilog_2005", "Verilog_1995",
+##                  "Verilog_2001"
+##
+## That matters because vector_unit.sv declares `localparam int` inside its
+## PARAMETER PORT LIST, which is a 2009 construct. Quartus's SV-2005 mode
+## happens to accept it in practice; if a future version does not, the fix is
+## to move those localparams into the module body, not to raise this setting.
+## One assignment, not two: there is no SYSTEMVERILOG_INPUT_VERSION in
+## Quartus (it rejects the whole .qsf), only VERILOG_INPUT_VERSION.
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+
+## ----------------------------------------------------------------------------
+## Include path
+##
+## ucode_pkg.svh and yolo_descriptor_pkg.svh are `include`d, not imported --
+## they are localparam headers, which is what makes the core portable. Quartus
+## will not find them without this.
+## ----------------------------------------------------------------------------
+set_global_assignment -name SEARCH_PATH ../rtl/core
+set_global_assignment -name SEARCH_PATH ../rtl/platform
+set_global_assignment -name SEARCH_PATH ../rtl/eth
+
+## ----------------------------------------------------------------------------
+## Source files
+##
+## The core list is GENERATED -- qrts/tools/port_rtl.py writes core_files.tcl
+## from the same manifest it uses to populate rtl/core/. Re-run the porter
+## after any change to the core RTL; do not add core files here by hand, or the
+## two lists drift and a file added in one place is silently missing from the
+## other.
+## ----------------------------------------------------------------------------
+source core_files.tcl
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/Accelerator_Top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/accel_dma_seq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/accelerator.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/axi4_lite_slave.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/axi4_master.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/bram_act_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/bram_out_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/bram_weight_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/buffer_reg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/control_unit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/dvc_generic_mux.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/im2col_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/line_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/pe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/pe_pair.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/register_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/shift_reg_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/silu_lut.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/silu_unit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/system_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/systolic_array.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/ucode_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/vector_unit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_axi4_slave_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_axi_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_conv_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_detect_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_elem_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/core/yolo_layer_sequencer.sv
+
+## Platform shims: these replace the Xilinx bus layer and are hand-written.
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/platform/avalon_mm_master.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/platform/axi_to_avalon.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/mem/sdram_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/mem/avalon_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/platform/jtag_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/mii_rx_adapter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/mii_tx_adapter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/eth_cmd_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/platform/dvcon_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/platform/dvcon_top.sv
+
+## Ethernet MAC. Intel's Triple-Speed Ethernet IP is licensed and unusable in
+## Lite, so this is ours.
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/crc32_eth.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/eth_mac_rx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/eth/eth_mac_tx.sv
+
+## ----------------------------------------------------------------------------
+## Memory initialisation
+##
+## silu_unit and yolo_elem_engine read these with $readmemh. They are
+## GENERATED, not built in an initial block: Quartus does not fold $exp/$rtoi
+## at elaboration the way Vivado does, so a self-initialising ROM comes up
+## undefined on this device. Regenerate with
+##     python ../../DVCFinal/tools/gen_silu_mif.py    --outdir .
+##     python ../../DVCFinal/tools/gen_softmax_mem.py --outdir .
+## ----------------------------------------------------------------------------
+set_global_assignment -name SEARCH_PATH .
+
+## ----------------------------------------------------------------------------
+## Timing
+## ----------------------------------------------------------------------------
+set_global_assignment -name SDC_FILE dvcon.sdc
+
+## ----------------------------------------------------------------------------
+## Pins
+## ----------------------------------------------------------------------------
+source ../pin/de2_115_pins.tcl
+## Quartus flattens the sourced pin file back into this .qsf when the GUI saves
+## the project. That duplicate is what carried the wrong DRAM_DQ and ENET0
+## locations: the file said one thing, the sourced .tcl said another, and the
+## last assignment won. The pinout lives in ../pin/de2_115_pins.tcl and nowhere
+## else -- check_pins.py fails the build if location assignments reappear here.
+
+## ----------------------------------------------------------------------------
+## Fitter and analysis
+##
+## BALANCED rather than an area or speed extreme. The two things this build has
+## to answer first are "does it fit" and "what is the real Fmax", and biasing
+## the fitter before either is known just moves the lie around.
+## ----------------------------------------------------------------------------
+set_global_assignment -name OPTIMIZATION_MODE BALANCED
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+
+## Report multi-corner timing. A design signed off at one corner on a C7 part
+## is a design that has not been signed off.
+set_global_assignment -name TIMING_ANALYZER_MULTICORNER_ANALYSIS ON
+
+## Cyclone IV E has no hard DSP block -- it has 18x18 embedded MULTIPLIERS. The
+## budget that matters is 266 of them (532 9x9). Each PE is a signed 8x8 that
+## fits a 9x9, two per 18x18 block, so ARRAY_SIZE=16 costs 128 blocks and
+## ARRAY_SIZE=24 would cost 288, which does not fit. dvcon_top defaults to 16.
+##
+## Check the real number after synthesis:
+##     grep -A7 "Embedded Multiplier" output_files/dvcon.map.rpt
+set_global_assignment -name AUTO_DSP_RECOGNITION ON
+
+## Do NOT let the tool promote inferred RAM into logic silently. The core's
+## ramstyle attributes (rewritten from the Xilinx spelling by the porter) ask
+## for M9K; if a block will not fit there the fitter should say so rather than
+## spending several thousand LEs on a register file.
+set_global_assignment -name AUTO_RAM_RECOGNITION ON
+set_global_assignment -name AUTO_ROM_RECOGNITION ON
+
+## ----------------------------------------------------------------------------
+## Configuration
+## ----------------------------------------------------------------------------
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name GENERATE_RBF_FILE ON

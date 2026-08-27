@@ -1,0 +1,123 @@
+[
+  {
+    "test_id": 1,
+    "prompt": "something to sleep comfortably on",
+    "gt": "bed",
+    "pred": "bed",
+    "score": 0.9747825562953949,
+    "sem": 1.0,
+    "conf": 0.8991302251815796,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test01_000000000632.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 2,
+    "prompt": "something which can be used to type a document",
+    "gt": "keyboard",
+    "pred": "dining table",
+    "score": 0.7141275852918625,
+    "sem": 0.7805823087692261,
+    "conf": 0.5147634148597717,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test02_000000002157.jpg",
+    "ok": false
+  },
+  {
+    "test_id": 3,
+    "prompt": "something into which we can pour a drink",
+    "gt": "wine glass",
+    "pred": "keyboard",
+    "score": 0.6017360687255859,
+    "sem": 0.5030907392501831,
+    "conf": 0.8976720571517944,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test03_000000001503.jpg",
+    "ok": false
+  },
+  {
+    "test_id": 4,
+    "prompt": "something to cut a birthday cake",
+    "gt": "knife",
+    "pred": "knife",
+    "score": 0.5940798372030258,
+    "sem": 0.5542539358139038,
+    "conf": 0.7135575413703918,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test04_000000002592.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 5,
+    "prompt": "something to sit comfortably on",
+    "gt": "chair",
+    "pred": "chair",
+    "score": 0.9822383671998978,
+    "sem": 1.0,
+    "conf": 0.9289534687995911,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test05_000000004495.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 6,
+    "prompt": "something which can be used to travel to work",
+    "gt": "car",
+    "pred": "car",
+    "score": 0.664130762219429,
+    "sem": 0.664007306098938,
+    "conf": 0.6645011305809021,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test06_000000006723.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 7,
+    "prompt": "something to store and preserve ice cream",
+    "gt": "refrigerator",
+    "pred": "refrigerator",
+    "score": 0.9125600904226303,
+    "sem": 1.0,
+    "conf": 0.6502403616905212,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test07_000000007574.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 8,
+    "prompt": "something where i can rest and sleep",
+    "gt": "bed",
+    "pred": "bed",
+    "score": 0.960489884018898,
+    "sem": 1.0,
+    "conf": 0.841959536075592,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test08_000000007795.jpg",
+    "ok": true
+  },
+  {
+    "test_id": 9,
+    "prompt": "something onto which we can be pour water",
+    "gt": "cup",
+    "pred": "bottle",
+    "score": 0.7548368172720075,
+    "sem": 0.9893370866775513,
+    "conf": 0.05133600905537605,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test09_000000009400.jpg",
+    "ok": false
+  },
+  {
+    "test_id": 10,
+    "prompt": "something i can use to drink tea with",
+    "gt": "cup",
+    "pred": "bottle",
+    "score": 0.8202147036790848,
+    "sem": 0.868708610534668,
+    "conf": 0.6747329831123352,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test10_000000009590.jpg",
+    "ok": false
+  },
+  {
+    "test_id": 11,
+    "prompt": "the best place to keep a jug full of water",
+    "gt": "table",
+    "pred": "vase",
+    "score": 0.476964907720685,
+    "sem": 0.6089661121368408,
+    "conf": 0.08096129447221756,
+    "out": "D:\\DVCon\\DVCon-SittingDucks\\out_validate\\test11_000000010092.jpg",
+    "ok": false
+  }
+]
