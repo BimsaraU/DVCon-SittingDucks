@@ -48,6 +48,11 @@ module yolo_elem_engine #(
     input  wire [31:0] aux0, aux1,
 
     output reg         busy,
+    // Elem engine state, for the same reason the conv engine has one: LEDR
+    // shows ee_busy and ce_busy asserted together while the sequencer waits in
+    // CONV_W, and busy alone cannot say whether this engine is mid-job or has
+    // simply left busy asserted after finishing.
+    output wire [31:0] dbg_elem,
     output reg         done,
     output reg         error,
     // 5 bits, not 4: the state encoding outgrew a nibble when the softmax
@@ -157,6 +162,7 @@ module yolo_elem_engine #(
     // whole plane apart.
     wire [31:0] sm_src_off = sm_ch * plane_sz + {16'h0, sm_pos};
     wire [31:0] sm_dst_off = sm_ch * plane_sz + {16'h0, sm_pos};
+    wire [31:0] sm_wr_addr = g_dst + sm_dst_off;
 
     // exp(x - max) with both in INT8 codes. The table steps by 1/16 of a code,
     // so the index is 16*(max - x), saturating at the bottom of the table.
@@ -221,6 +227,7 @@ module yolo_elem_engine #(
         E_SM_DIV = 5'd16;   // serial divide for the softmax normalisation
 
     reg [4:0] state;
+    assign dbg_elem = {27'h0, state};
 
     // Address of operand A for the current op/element.
     reg [31:0] a_base, a_off;
@@ -406,7 +413,17 @@ module yolo_elem_engine #(
             // Doing both in the same state asserts wr_start alongside a
             // non-blocking update that has not landed yet.
             E_WR: begin
-                wr_addr <= {32'h0, e_dst_addr};
+                // The address must be 8-byte ALIGNED. wr_data and wr_strb below
+                // place the byte in lane e_dst_addr[2:0] of a 64-bit beat, so
+                // the low three bits are already accounted for there. Passing
+                // them in the address as well applies the offset twice: the
+                // bridge splits the beat into two 32-bit Avalon beats, the
+                // controller drops address bits [1:0] and applies byteenables
+                // relative to its own aligned word, and the byte lands
+                // somewhere else entirely -- on hardware a 32-element Add wrote
+                // 16 of its bytes, each 4 low, every one clobbering the element
+                // that belonged there.
+                wr_addr <= {32'h0, e_dst_addr & 32'hFFFF_FFF8};
                 wr_data <= {56'h0, wr_data[7:0]} << {e_dst_addr[2:0], 3'b000};
                 wr_strb <= 8'h01 << e_dst_addr[2:0];
                 wr_len  <= 8'd1;
@@ -539,9 +556,14 @@ module yolo_elem_engine #(
             E_SM_DIV: begin
                 if (!sd_busy) begin
                     wr_data <= {56'h0, (sd_q > 24'd127) ? 8'd127 : sd_q[7:0]}
-                               << {sm_dst_off[2:0], 3'b000};
-                    wr_strb <= 8'h01 << sm_dst_off[2:0];
-                    wr_addr <= {32'h0, g_dst + sm_dst_off};
+                               << {sm_wr_addr[2:0], 3'b000};
+                    // The lane comes from the FULL byte address, not from the
+                    // offset alone -- those agree only when g_dst happens to be
+                    // 8-byte aligned, and nothing in the descriptor format
+                    // requires that.
+                    wr_strb <= 8'h01 << sm_wr_addr[2:0];
+                    // 8-byte aligned, for the same reason as E_WR above.
+                    wr_addr <= {32'h0, sm_wr_addr & 32'hFFFF_FFF8};
                     wr_len  <= 8'd1;
                     state   <= E_WR_GO;
                 end else begin

@@ -56,6 +56,14 @@ module yolo_layer_sequencer #(
 
     // ---- control from the CPU register file ----
     input  wire        start_pulse,
+    // Descriptor readback for the host, as a real port rather than a
+    // hierarchical reference: Quartus will not synthesise a cross-module
+    // reference into a submodule's array, and the failure is at synthesis, not
+    // in simulation. See qrts/rtl/platform/jtag_ctrl.sv REG_DBG_DSEL/DVAL for
+    // why the latched descriptor has to be observable from the host at all.
+    input  wire [3:0]  dbg_desc_sel,
+    output wire [31:0] dbg_desc_val,
+
     input  wire [31:0] desc_base,      // descriptor table base in DRAM
     input  wire [31:0] img_addr,       // input bitmap (INT8 CHW, already scaled)
     input  wire [31:0] out_addr,       // final box list destination
@@ -131,6 +139,7 @@ module yolo_layer_sequencer #(
     // Descriptor register file: one 64-byte record as 16 words
     // =========================================================================
     reg [31:0] desc [0:15];
+    assign dbg_desc_val = desc[dbg_desc_sel];
     reg [31:0] desc_ptr;        // byte address of the descriptor being executed
     reg [3:0]  fetch_beat;
 

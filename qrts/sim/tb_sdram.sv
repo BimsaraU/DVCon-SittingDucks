@@ -37,6 +37,10 @@ module tb_sdram;
     wire        avs_readdatavalid;
     wire        avs_waitrequest;
 
+    // Read capture tap, driveable so the sweep the host tool relies on is
+    // itself tested. 1 is nominal.
+    reg [1:0] cap_sel = 2'd1;
+
     wire [12:0] dram_addr;
     wire [1:0]  dram_ba;
     wire        dram_cas_n, dram_ras_n, dram_we_n, dram_cs_n, dram_cke;
@@ -51,7 +55,7 @@ module tb_sdram;
         .T_INIT(20), .T_REFI(300)
     ) dut (
         .clk(clk), .rst_n(rst_n),
-        .avs_address(avs_address), .avs_read(avs_read), .avs_write(avs_write),
+        .cap_sel(cap_sel), .avs_address(avs_address), .avs_read(avs_read), .avs_write(avs_write),
         .avs_writedata(avs_writedata), .avs_byteenable(avs_byteenable),
         .avs_burstcount(avs_burstcount),
         .avs_readdata(avs_readdata), .avs_readdatavalid(avs_readdatavalid),
@@ -157,7 +161,7 @@ module tb_sdram;
         end
     endtask
 
-    integer i;
+    integer i, t, ok_cnt;
     initial begin
         $display("=== tb_sdram ===");
         repeat (4) @(posedge clk);
@@ -199,7 +203,35 @@ module tb_sdram;
         for (i = 0; i < 4; i = i + 1)
             check($sformatf("after refresh[%0d]", i), rdbuf[i], 32'hBEEF_0000 + i);
 
-        // -- 6. the model's protocol assertions -------------------------------
+        // -- 6. the read capture tap ------------------------------------------
+        // infprog/dvcon_link.py sweeps cap_sel on the board and concludes from
+        // which tap reads back cleanly. That conclusion is only worth anything
+        // if the knob actually moves the capture, and if the NOMINAL tap is the
+        // correct one in a design whose timing is ideal -- which in simulation
+        // it is. So: tap 1 must be right here, and the neighbours must be
+        // wrong. A knob that did nothing would pass every tap and make the
+        // board sweep silently meaningless.
+        wr_burst(25'h00_0800, 8, 32'h5A5A_0000, 4'hF);
+        repeat (20) @(posedge clk);
+
+        for (t = 0; t < 4; t = t + 1) begin
+            cap_sel = t[1:0];
+            repeat (4) @(posedge clk);
+            rd_burst(25'h00_0800, 8);
+            ok_cnt = 0;
+            for (i = 0; i < 8; i = i + 1)
+                if (rdbuf[i] === 32'h5A5A_0000 + i) ok_cnt = ok_cnt + 1;
+            $display("  tap %0d: %0d/8 words correct", t, ok_cnt);
+            if (t == 1) begin
+                check("nominal tap reads correctly", ok_cnt, 8);
+            end else if (ok_cnt == 8) begin
+                $display("  FAIL tap %0d also reads correctly -- cap_sel is not moving the capture, so a board sweep proves nothing", t);
+                errors = errors + 1;
+            end
+        end
+        cap_sel = 2'd1;
+
+        // -- 7. the model's protocol assertions -------------------------------
         if (mem.errors != 0) begin
             $display("  FAIL %0d protocol violation(s) reported by the model",
                      mem.errors);

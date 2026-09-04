@@ -40,7 +40,10 @@
 
 module dvcon_regs #(
     parameter integer ARRAY_SIZE = 16,
-    parameter [15:0]  BUILD_ID   = 16'h0001
+    // Bump on every bitstream that changes behaviour: IDENT is the only way
+    // to tell from the host which build is actually configured. 0002 is the
+    // MII TX-clock and jtag_ctrl waitrequest fixes.
+    parameter [15:0]  BUILD_ID   = 16'h0007
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -136,7 +139,8 @@ module dvcon_regs #(
     // Avalon stalls the requester until the AXI transaction completes. That is
     // the whole reason waitrequest exists, and it keeps this module from
     // needing a queue.
-    assign avs_waitrequest = (state != S_IDLE);
+    //
+assign avs_waitrequest = (state != S_IDLE);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

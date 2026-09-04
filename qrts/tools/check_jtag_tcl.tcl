@@ -20,6 +20,10 @@ proc get_hardware_names {} { return [list {USB-Blaster [USB-0]}] }
 proc get_device_names {args} { return [list {@1: EP4CE115F29 (0x020F70DD)}] }
 proc open_device {args} {}
 proc close_device {args} {}
+# dvcon_open takes exclusive access before any virtual shift; without
+# these stubs the script dies here with "invalid command name".
+proc device_lock {args} {}
+proc device_unlock {args} {}
 proc device_virtual_ir_shift {args} {}
 
 # Track which register the ADDR scan selected, so the DATA scan can return
@@ -47,8 +51,13 @@ proc device_virtual_dr_shift {args} {
 
     # DATA scan. IDENT must carry the 0xDC magic or cmd_ident exits; STATUS
     # must have the done bit set or cmd_run polls forever.
+    # These indices must track the REG_* constants in dvcon_jtag.tcl. IDENT is
+    # word 0x0C (byte 0x30); it was 15 here, matching the 0x0F the script used
+    # to send, so this check kept passing while the real read went to the wrong
+    # register on hardware.
     switch -- $stub_reg {
-        15      { return "DC100001" }
+        12      { return "DC100001" }
+        57      { return "00000000" }
         1       { return "00000002" }
         10      { return "00000003" }
         default { return "00000004" }

@@ -31,20 +31,32 @@
 #define DVCON_OP_ACK_REQ  0x06u  /* reply with the 64-bit received bitmap */
 #define DVCON_OP_ACK  0x10u  /* FPGA -> host: the bitmap */
 
-#define DVCON_REG_CTRL  0x00u  /* bit0 START, bit1 soft reset, bit2 ucode mode */
-#define DVCON_REG_STATUS  0x01u  /* bit0 busy, bit1 done, bit2 error */
+#define DVCON_REG_CTRL  0x00u  /* bit0 START (self-clearing), bit1 MODE 0=GEMM 1=YOLO, bit2 ENGINE 0=sequencer 1=microcode */
+#define DVCON_REG_STATUS  0x01u  /* [0]busy [1]done [2]error [7:4]fsm, read-only */
+#define DVCON_REG_SRC_ADDR  0x02u  /* GEMM activations */
+#define DVCON_REG_DST_ADDR  0x03u  /* GEMM results */
+#define DVCON_REG_IMG_DIM  0x04u  /* {K, ARRAY_SIZE} */
+#define DVCON_REG_WEIGHT_ADDR  0x05u  /* weight blob base */
 #define DVCON_REG_DESC_ADDR  0x06u  /* descriptor table base */
 #define DVCON_REG_IMG_ADDR  0x07u  /* input frame base */
 #define DVCON_REG_BOX_ADDR  0x08u  /* box list base */
 #define DVCON_REG_CONF_THRESH  0x09u  /* INT8 confidence threshold */
-#define DVCON_REG_NUM_BOXES  0x0Au  /* boxes written by the last frame */
-#define DVCON_REG_IDENT  0x0Fu  /* 0xDC, ARRAY_SIZE, build id */
+#define DVCON_REG_NUM_BOXES  0x0Au  /* boxes written by the last frame, read-only */
+#define DVCON_REG_LAYER_IDX  0x0Bu  /* which descriptor is executing, read-only */
+#define DVCON_REG_IDENT  0x0Cu  /* {8'hDC, ARRAY_SIZE, build id}, read-only */
+#define DVCON_REG_SD_TAP  0x33u  /* SDRAM read capture tap 0..3 (write) */
+#define DVCON_REG_DBG_DSEL  0x34u  /* which descriptor word to read back (write) */
+#define DVCON_REG_DBG_DVAL  0x35u  /* desc[DSEL] as the sequencer latched it */
+#define DVCON_REG_ETH_DROP  0x36u  /* words the ethernet write queue could not accept */
+#define DVCON_REG_DBG_SRC  0x37u  /* conv src address the sequencer decoded */
+#define DVCON_REG_DBG_DST  0x38u  /* conv dst address the sequencer decoded */
+#define DVCON_REG_ETH_FILT  0x39u  /* good FCS but addressed to someone else */
 #define DVCON_REG_ETH_GOOD  0x3Au  /* ethernet frames with a good FCS */
 #define DVCON_REG_ETH_BAD  0x3Bu  /* ethernet frames that failed FCS */
 #define DVCON_REG_ETH_CMD  0x3Cu  /* command frames accepted */
 #define DVCON_REG_ETH_BITMAP  0x3Du  /* low 32 bits of the ACK window bitmap */
-#define DVCON_REG_MEMADDR  0x3Eu  /* SDRAM read cursor (write) */
-#define DVCON_REG_MEMDATA  0x3Fu  /* word at the cursor; post-increments (read) */
+#define DVCON_REG_MEMADDR  0x3Eu  /* SDRAM cursor (write) */
+#define DVCON_REG_MEMDATA  0x3Fu  /* word at the cursor; post-increments (read and write) */
 
 /* Command header, big endian on the wire. */
 struct dvcon_hdr {

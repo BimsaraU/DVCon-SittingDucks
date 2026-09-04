@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 // THE CLOCK ON PIN A17
 // ---------------------------------------------------------------------------
-// The DE2-115 labels that pin ENET0_GTX_CLK and the pin file calls the
+// The DE2-115 labels that pin ENET1_GTX_CLK and the pin file calls the
 // interface RGMII, but it is the 88E1111's transmit clock and its meaning
 // depends on the mode the PHY is strapped into:
 //

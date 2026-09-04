@@ -70,13 +70,60 @@ module jtag_ctrl (
     input  wire [31:0] mem_readdata,
     input  wire        mem_readdatavalid,
     input  wire        mem_waitrequest,
+    // Write side of the memory window: a WRITE to REG_MEMDATA stores a word at
+    // the cursor and post-increments, mirroring the read. This is how the model
+    // blob is loaded when Ethernet is not available.
+    output reg         mem_write,
+    output reg  [31:0] mem_writedata,
+    output wire [3:0]  mem_byteenable,
 
     // ---- Ethernet statistics, readable at 0x3A..0x3D ----
     input  wire [31:0] eth_good,
     input  wire [31:0] eth_bad,
     input  wire [31:0] eth_frames,
+    // Frames that passed FCS but were addressed to someone else. Without this
+    // a silent link is ambiguous: "the PHY is not in MII" and "frames are
+    // arriving fine but none is for us" both read as all-zero counters.
+    input  wire [31:0] eth_filtered,
+    // Words the Ethernet engine's write queue could not accept. Anything but
+    // zero after a model load means SDRAM has holes in it.
+    input  wire [31:0] eth_wdrop,
+    // Accelerator observability (see REG_DBG_* below).
+    input  wire [31:0] dbg_ce_src,
+    input  wire [31:0] dbg_ce_dst,
+
+    // ---- descriptor readback window ----
+    // Write DSEL (0x34) with an index 0..15, then read DVAL (0x35) to get the
+    // word the sequencer actually LATCHED into desc[index].
+    //
+    // This exists because the descriptor path is clean in simulation
+    // (sim/tb_desc_path.sv walks a known ramp through both AXI translations and
+    // both arbiters and reproduces it exactly) and wrong on the board. That
+    // rules out logic and leaves the SDRAM read capture, which no register
+    // could previously observe: comparing what the host wrote with what the
+    // sequencer latched needed a bench probe. Reading the whole 16-word array
+    // back tells apart the two failures that look alike from desc[0] alone --
+    // a dropped first beat, which shifts every word up by one and leaves the
+    // last holding the word after the descriptor, versus a mis-timed capture,
+    // which corrupts words without shifting them.
+    output reg  [3:0]  dbg_desc_sel,
+    input  wire [31:0] dbg_desc_val,
+
+    // SDRAM read capture tap (see sdram_ctrl's cap_sel). 1 is nominal; the
+    // host sweeps 0..3 against a known pattern to find the one this fitted
+    // design actually needs.
+    output reg  [1:0]  sdram_cap_sel,
+
+    // Conv engine internals (see yolo_conv_engine's dbg_conv0/1).
+    input  wire [31:0] dbg_conv0,
+    input  wire [31:0] dbg_conv1,
+    input  wire [31:0] dbg_elem,
+    input  wire [31:0] dbg_arb,
+
     input  wire [63:0] eth_bitmap
 );
+
+    assign mem_byteenable = 4'hF;
 
     localparam [5:0] REG_MEMADDR = 6'h3E,
                      REG_MEMDATA = 6'h3F,
@@ -86,7 +133,18 @@ module jtag_ctrl (
                      REG_ETH_GOOD = 6'h3A,   // frames with a good FCS
                      REG_ETH_BAD  = 6'h3B,   // frames that failed FCS
                      REG_ETH_CMD  = 6'h3C,   // command frames accepted
-                     REG_ETH_BM   = 6'h3D;   // low 32 bits of the ACK bitmap
+                     REG_ETH_BM   = 6'h3D,   // low 32 bits of the ACK bitmap
+                     REG_ETH_FILT = 6'h39,   // good FCS, not our MAC
+                     REG_DBG_SRC  = 6'h37,   // conv src the sequencer decoded
+                     REG_DBG_DST  = 6'h38,   // conv dst the sequencer decoded
+                     REG_ETH_DROP = 6'h36,   // words the eth write queue lost
+                     REG_DBG_DVAL = 6'h35,   // desc[DSEL], as latched
+                     REG_DBG_DSEL = 6'h34,   // which descriptor word to read
+                     REG_SD_TAP   = 6'h33,   // SDRAM read capture tap, 0..3
+                     REG_DBG_CV0  = 6'h32,   // conv {beat_cnt, state}
+                     REG_DBG_CV1  = 6'h31,   // conv {oc_tile, ic_tile}
+                     REG_DBG_EE   = 6'h30,   // elem engine state
+                     REG_DBG_ARB  = 6'h2F;   // internal arbiter grant + lock
 
     // ---- virtual JTAG node --------------------------------------------------
     wire        tck, tdi;
@@ -207,29 +265,86 @@ module jtag_ctrl (
     wire req_edge = req_sync[2] ^ req_sync[1];
 
     localparam [2:0] C_IDLE = 3'd0, C_WRITE = 3'd1, C_READ = 3'd2,
-                     C_RDCAP = 3'd3, C_MEM = 3'd4, C_MEMW = 3'd5;
+                     C_RDCAP = 3'd3, C_MEM = 3'd4, C_MEMW = 3'd5,
+                     C_MEMWR = 3'd6;
     reg [2:0] cstate;
+
+    // Completion tracking for the register port.
+    //
+    // dvcon_regs drives `avs_waitrequest = (state != S_IDLE)`, and it accepts a
+    // request while its state is STILL S_IDLE -- so waitrequest reads LOW in
+    // exactly the cycle the transaction is launched, and only rises the cycle
+    // after. Treating that first low as "accepted and data ready" captured the
+    // PREVIOUS access's readdata: on the board every register except IDENT came
+    // back one transaction late, CTRL reading 0xDC100001 straight after an
+    // IDENT read.
+    //
+    // So wait for waitrequest to RISE and then FALL. IDENT never raises it --
+    // dvcon_regs answers that one combinationally in S_IDLE without an AXI
+    // cycle -- so a slave that never stalls is taken as complete after a short
+    // grace window. This mirrors what tb_dvcon_regs's master already does,
+    // which is why that bench passed while the hardware did not: no bench
+    // connects jtag_ctrl to dvcon_regs.
+    localparam [2:0] STALL_GRACE = 3'd4;
+    reg       saw_stall;
+    reg [2:0] grace;
+    wire      access_done = saw_stall ? !avm_waitrequest
+                                      : (grace == STALL_GRACE);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             cstate        <= C_IDLE;
+            saw_stall     <= 1'b0;
+            grace         <= 3'd0;
             avm_address   <= '0;
             avm_read      <= 1'b0;
             avm_write     <= 1'b0;
             avm_writedata <= '0;
             capture       <= '0;
+            dbg_desc_sel  <= 4'd0;
+            // Tap 0 (CAS_LAT-1), not the nominal 1. Measured on this board with
+            // desc_tap_sweep against a 16-beat descriptor burst: tap 0 returns
+            // 16/16 words exactly, tap 1 returns 1/16 with every word shifted
+            // down by one, tap 2 by two, tap 3 by three. The reset value of 1
+            // was capturing a cycle late, so each beat picked up the NEXT
+            // word. Single-word JTAG reads survived that -- an isolated read
+            // leaves data on DQ far longer than a back-to-back burst beat --
+            // which is why memory verified clean while every descriptor fetch
+            // was skewed.
+            sdram_cap_sel <= 2'd0;
             mem_address   <= '0;
             mem_read      <= 1'b0;
+            mem_write     <= 1'b0;
+            mem_writedata <= '0;
         end else begin
             case (cstate)
             C_IDLE: begin
                 avm_read  <= 1'b0;
                 avm_write <= 1'b0;
                 mem_read  <= 1'b0;
+                mem_write <= 1'b0;
                 if (req_edge) begin
-                    if (!req_write && (req_addr == REG_ETH_GOOD ||
+                    if (req_write && req_addr == REG_SD_TAP) begin
+                        sdram_cap_sel <= req_data[1:0];
+                        cstate <= C_IDLE;
+                    end else if (req_write && req_addr == REG_DBG_DSEL) begin
+                        // Selects which descriptor word REG_DBG_DVAL returns.
+                        // A plain register in this clock domain; the read side
+                        // is combinational off it.
+                        dbg_desc_sel <= req_data[3:0];
+                        cstate <= C_IDLE;
+                    end else if (!req_write && (req_addr == REG_ETH_GOOD ||
                                        req_addr == REG_ETH_BAD  ||
                                        req_addr == REG_ETH_CMD  ||
+                                       req_addr == REG_ETH_FILT ||
+                                       req_addr == REG_ETH_DROP ||
+                                       req_addr == REG_DBG_SRC ||
+                                       req_addr == REG_DBG_DST ||
+                                       req_addr == REG_DBG_DVAL ||
+                                       req_addr == REG_DBG_CV0 ||
+                                       req_addr == REG_DBG_CV1 ||
+                                       req_addr == REG_DBG_EE ||
+                                       req_addr == REG_DBG_ARB ||
                                        req_addr == REG_ETH_BM)) begin
                         // Answered directly, without an Avalon cycle: these
                         // are wires from the Ethernet blocks, not registers in
@@ -238,6 +353,15 @@ module jtag_ctrl (
                         REG_ETH_GOOD: capture <= eth_good;
                         REG_ETH_BAD:  capture <= eth_bad;
                         REG_ETH_CMD:  capture <= eth_frames;
+                        REG_ETH_FILT: capture <= eth_filtered;
+                        REG_DBG_SRC:  capture <= dbg_ce_src;
+                        REG_DBG_DST:  capture <= dbg_ce_dst;
+                        REG_ETH_DROP: capture <= eth_wdrop;
+                        REG_DBG_DVAL: capture <= dbg_desc_val;
+                        REG_DBG_CV0:  capture <= dbg_conv0;
+                        REG_DBG_CV1:  capture <= dbg_conv1;
+                        REG_DBG_EE:   capture <= dbg_elem;
+                        REG_DBG_ARB:  capture <= dbg_arb;
                         default:      capture <= eth_bitmap[31:0];
                         endcase
                         cstate <= C_IDLE;
@@ -250,8 +374,16 @@ module jtag_ctrl (
                         // Fetch the word at the cursor.
                         mem_read <= 1'b1;
                         cstate   <= C_MEM;
+                    end else if (req_addr == REG_MEMDATA && req_write) begin
+                        // Store at the cursor. Same post-increment as the read,
+                        // so the host sets MEMADDR once and streams words.
+                        mem_writedata <= req_data;
+                        mem_write     <= 1'b1;
+                        cstate        <= C_MEMWR;
                     end else begin
                         avm_address <= req_addr;
+                        saw_stall   <= 1'b0;
+                        grace       <= 3'd0;
                         if (req_write) begin
                             avm_writedata <= req_data;
                             avm_write     <= 1'b1;
@@ -278,13 +410,29 @@ module jtag_ctrl (
                 mem_address <= mem_address + 32'd4;
                 cstate      <= C_IDLE;
             end
-            C_WRITE: if (!avm_waitrequest) begin
-                avm_write <= 1'b0;
-                cstate    <= C_IDLE;
+            // The write is accepted when the slave stops stalling. Avalon
+            // posts writes -- there is no response to wait for -- so the
+            // cursor advances here and the next word can be scanned in.
+            C_MEMWR: if (!mem_waitrequest) begin
+                mem_write   <= 1'b0;
+                mem_address <= mem_address + 32'd4;
+                cstate      <= C_IDLE;
             end
-            C_READ: if (!avm_waitrequest) begin
-                avm_read <= 1'b0;
-                cstate   <= C_RDCAP;
+            C_WRITE: begin
+                if (avm_waitrequest)          saw_stall <= 1'b1;
+                else if (grace != STALL_GRACE) grace    <= grace + 3'd1;
+                if (access_done) begin
+                    avm_write <= 1'b0;
+                    cstate    <= C_IDLE;
+                end
+            end
+            C_READ: begin
+                if (avm_waitrequest)          saw_stall <= 1'b1;
+                else if (grace != STALL_GRACE) grace    <= grace + 3'd1;
+                if (access_done) begin
+                    avm_read <= 1'b0;
+                    cstate   <= C_RDCAP;
+                end
             end
             // Capture a cycle after the command is accepted. Slaves differ on
             // whether readdata is valid in the accepting cycle or the one

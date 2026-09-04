@@ -26,19 +26,31 @@
 `define DVCON_OP_ACK_REQ 8'h06   // reply with the 64-bit received bitmap
 `define DVCON_OP_ACK 8'h10   // FPGA -> host: the bitmap
 
-`define DVCON_REG_CTRL 6'h00  // bit0 START, bit1 soft reset, bit2 ucode mode
-`define DVCON_REG_STATUS 6'h01  // bit0 busy, bit1 done, bit2 error
+`define DVCON_REG_CTRL 6'h00  // bit0 START (self-clearing), bit1 MODE 0=GEMM 1=YOLO, bit2 ENGINE 0=sequencer 1=microcode
+`define DVCON_REG_STATUS 6'h01  // [0]busy [1]done [2]error [7:4]fsm, read-only
+`define DVCON_REG_SRC_ADDR 6'h02  // GEMM activations
+`define DVCON_REG_DST_ADDR 6'h03  // GEMM results
+`define DVCON_REG_IMG_DIM 6'h04  // {K, ARRAY_SIZE}
+`define DVCON_REG_WEIGHT_ADDR 6'h05  // weight blob base
 `define DVCON_REG_DESC_ADDR 6'h06  // descriptor table base
 `define DVCON_REG_IMG_ADDR 6'h07  // input frame base
 `define DVCON_REG_BOX_ADDR 6'h08  // box list base
 `define DVCON_REG_CONF_THRESH 6'h09  // INT8 confidence threshold
-`define DVCON_REG_NUM_BOXES 6'h0A  // boxes written by the last frame
-`define DVCON_REG_IDENT 6'h0F  // 0xDC, ARRAY_SIZE, build id
+`define DVCON_REG_NUM_BOXES 6'h0A  // boxes written by the last frame, read-only
+`define DVCON_REG_LAYER_IDX 6'h0B  // which descriptor is executing, read-only
+`define DVCON_REG_IDENT 6'h0C  // {8'hDC, ARRAY_SIZE, build id}, read-only
+`define DVCON_REG_SD_TAP 6'h33  // SDRAM read capture tap 0..3 (write)
+`define DVCON_REG_DBG_DSEL 6'h34  // which descriptor word to read back (write)
+`define DVCON_REG_DBG_DVAL 6'h35  // desc[DSEL] as the sequencer latched it
+`define DVCON_REG_ETH_DROP 6'h36  // words the ethernet write queue could not accept
+`define DVCON_REG_DBG_SRC 6'h37  // conv src address the sequencer decoded
+`define DVCON_REG_DBG_DST 6'h38  // conv dst address the sequencer decoded
+`define DVCON_REG_ETH_FILT 6'h39  // good FCS but addressed to someone else
 `define DVCON_REG_ETH_GOOD 6'h3A  // ethernet frames with a good FCS
 `define DVCON_REG_ETH_BAD 6'h3B  // ethernet frames that failed FCS
 `define DVCON_REG_ETH_CMD 6'h3C  // command frames accepted
 `define DVCON_REG_ETH_BITMAP 6'h3D  // low 32 bits of the ACK window bitmap
-`define DVCON_REG_MEMADDR 6'h3E  // SDRAM read cursor (write)
-`define DVCON_REG_MEMDATA 6'h3F  // word at the cursor; post-increments (read)
+`define DVCON_REG_MEMADDR 6'h3E  // SDRAM cursor (write)
+`define DVCON_REG_MEMDATA 6'h3F  // word at the cursor; post-increments (read and write)
 
 `endif

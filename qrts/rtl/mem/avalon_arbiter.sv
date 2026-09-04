@@ -68,6 +68,13 @@ module avalon_arbiter #(
     // gets whatever is left after the other two.
     input  wire [ADDR_W-1:0]   m2_address,
     input  wire                m2_read,
+    // Master 2 was read-only, which left NO way to get data into SDRAM except
+    // Ethernet -- so a dead PHY meant the accelerator could never be given a
+    // model at all. Writes here let the JTAG cable load it: measured at
+    // 0.37 ms per word, a 2.46 MB blob is under four minutes.
+    input  wire                m2_write,
+    input  wire [DATA_W-1:0]   m2_writedata,
+    input  wire [DATA_W/8-1:0] m2_byteenable,
     output wire [DATA_W-1:0]   m2_readdata,
     output reg                 m2_readdatavalid,
     output wire                m2_waitrequest,
@@ -85,16 +92,16 @@ module avalon_arbiter #(
 );
 
     reg        busy;        // a burst is in flight
-    reg        owner;       // which master owns it (0 or 1)
+    reg [1:0]  owner;       // which master owns it (0, 1 or 2)
     reg [BURST_W-1:0] beats_left;
 
     wire m0_req = m0_read || m0_write;
     wire m1_req = m1_read || m1_write;
-    wire m2_req = m2_read;
+    wire m2_req = m2_read | m2_write;
 
     // Who is being served this cycle: the burst owner if one is in flight,
     // otherwise strict priority 0 > 1 > 2.
-    wire [1:0] sel = busy ? {1'b0, owner}
+    wire [1:0] sel = busy ? owner
                           : (m0_req ? 2'd0 : (m1_req ? 2'd1 : 2'd2));
 
     // One dead cycle between bursts.
@@ -116,9 +123,11 @@ module avalon_arbiter #(
     assign s_read       = grant_ok && ((sel == 2'd0) ? m0_read :
                                        (sel == 2'd1) ? m1_read : m2_read);
     assign s_write      = grant_ok && ((sel == 2'd0) ? m0_write :
-                                       (sel == 2'd1) ? m1_write : 1'b0);
-    assign s_writedata  = (sel == 2'd1) ? m1_writedata : m0_writedata;
-    assign s_byteenable = (sel == 2'd1) ? m1_byteenable : m0_byteenable;
+                                       (sel == 2'd1) ? m1_write : m2_write);
+    assign s_writedata  = (sel == 2'd0) ? m0_writedata :
+                          (sel == 2'd1) ? m1_writedata : m2_writedata;
+    assign s_byteenable = (sel == 2'd0) ? m0_byteenable :
+                          (sel == 2'd1) ? m1_byteenable : m2_byteenable;
     assign s_burstcount = (sel == 2'd0) ? m0_burstcount :
                           (sel == 2'd1) ? m1_burstcount : 7'd1;
 
@@ -143,7 +152,7 @@ module avalon_arbiter #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             busy       <= 1'b0;
-            owner      <= 1'b0;
+            owner      <= 2'd0;
             beats_left <= '0;
             rd_owner   <= 2'd0;
             gap        <= 1'b0;
@@ -153,10 +162,13 @@ module avalon_arbiter #(
                 // Grant on the first accepted beat of a new burst.
                 if (grant_ok && (m0_req || m1_req || m2_req)
                     && !s_waitrequest) begin
-                    // `owner` only ever tracks a WRITE burst, and only masters
-                    // 0 and 1 write -- master 2's reads are single beats that
-                    // never set `busy`, so one bit is sufficient here.
-                    owner <= sel[0];
+                    // `owner` tracks a WRITE burst. Master 2 writes now (the
+                    // JTAG loader), so this can no longer be one bit: it used
+                    // to be, on the argument that only masters 0 and 1 write.
+                    // Master 2's writes are single-beat, so they never set
+                    // `busy` -- but truncating the owner of a master that can
+                    // write is a trap left armed for the next burst change.
+                    owner <= sel;
                     if (s_read) begin
                         // A read burst is one command; the data follows.
                         rd_owner <= sel;

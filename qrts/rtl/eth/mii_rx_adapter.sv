@@ -1,7 +1,7 @@
 // =============================================================================
 // mii_rx_adapter.sv — MII nibble stream -> byte stream, into the system clock
 //
-// The DE2-115's ENET0 is wired for MII: 4 data bits clocked by ENET0_RX_CLK,
+// The DE2-115's ENET1 is wired for MII: 4 data bits clocked by ENET1_RX_CLK,
 // which the PHY generates at 25 MHz for 100BASE-TX (2.5 MHz at 10BASE-T). The
 // MAC downstream is byte-wide and runs on clk_sys. This does both halves of
 // that gap.
@@ -46,7 +46,7 @@
 module mii_rx_adapter #(
     parameter integer AW = 4          // FIFO depth = 2**AW bytes
 )(
-    // ---- MII side, ENET0_RX_CLK domain ----
+    // ---- MII side, ENET1_RX_CLK domain ----
     input  wire       rx_clk,
     input  wire       rst_n,
     input  wire [3:0] mii_rxd,
