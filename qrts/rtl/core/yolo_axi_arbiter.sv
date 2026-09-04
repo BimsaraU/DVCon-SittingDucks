@@ -28,6 +28,35 @@
 // alone would be wrong: a new requester could win the port between the address
 // phase and the data phase and interleave its beats into another master's
 // burst. The lock is held from rd_start/wr_start to the matching done.
+//
+// ---------------------------------------------------------------------------
+// REQUESTS ARE LATCHED, NOT MUXED
+// ---------------------------------------------------------------------------
+// Requesters assert *_rd_start / *_wr_start for exactly ONE cycle. An earlier
+// version muxed that pulse straight through, choosing the winner
+// combinationally so it reached the master in the same cycle. That works only
+// while the channel is unlocked. If a requester pulses start while the lock is
+// held by someone else, the pulse goes nowhere: the master never sees the
+// request, no done can ever come back, and that requester waits forever.
+//
+// The claim that this could not happen -- "the sequencer serializes the
+// engines, so at most one requester is ever active" -- overlooked that the
+// SEQUENCER IS ITSELF REQUESTER 0. It issues the next descriptor fetch one
+// cycle after an engine reports done, while that engine's final burst can
+// still hold the lock (rd_locked clears on m_rd_done, which lands later). The
+// fetch pulse was dropped and the sequencer parked in S_FETCH_W with busy=1
+// and error=0 -- indistinguishable from a slow layer, and dependent on exactly
+// how the last burst lined up, which is why it moved between builds.
+//
+// So each requester's start is now LATCHED into a pending bit along with its
+// address and length, and issued when the channel frees. A pulse can no longer
+// be lost. m_*_start becomes a registered one-cycle pulse (one cycle later
+// than before, which no requester can observe); write DATA and STRB stay
+// combinational on the granted requester, because those belong to the data
+// phase and must track it beat by beat.
+//
+// sim/tb_yolo_arbiter.sv (in qrts) is the regression: test 3 has an engine
+// take the channel and the sequencer request mid-burst.
 // =============================================================================
 `timescale 1ns/1ps
 
@@ -60,6 +89,7 @@ module yolo_axi_arbiter (
     input  wire [63:0] s3_wr_data,  input wire [7:0] s3_wr_strb,  output wire s3_wr_data_ready, output wire s3_wr_done, output wire s3_wr_error,
 
     // ---- downstream: the one real axi4_master ----
+    output wire [31:0] dbg_arb,
     output reg         m_rd_start, output reg [63:0] m_rd_addr, output reg [7:0] m_rd_len,
     input  wire [63:0] m_rd_data,  input wire m_rd_data_valid, input wire m_rd_done, input wire m_rd_error,
     output reg         m_wr_start, output reg [63:0] m_wr_addr, output reg [7:0] m_wr_len,
@@ -73,45 +103,54 @@ module yolo_axi_arbiter (
     reg [1:0] rd_grant_r;     // who owns the channel once locked
     reg       rd_locked;
 
-    wire [3:0] rd_req = {s3_rd_start, s2_rd_start, s1_rd_start, s0_rd_start};
+    // One pending bit per requester, plus the address/length captured when the
+    // start pulse arrived, so a requester need not hold its request stable.
+    reg [3:0]  rd_pend;
+    reg [63:0] rd_addr_q [0:3];
+    reg [7:0]  rd_len_q  [0:3];
 
-    // Requesters assert *_rd_start for a SINGLE cycle. Selecting with a
-    // registered grant loses that pulse: the grant moves to the winner on the
-    // next edge, by which time start has already dropped and the master never
-    // sees a request. The engine then waits forever for a done that cannot
-    // come.
-    //
-    // So the winner is chosen combinationally and only the LOCK is registered.
-    // While unlocked, rd_grant is the highest-priority requester this cycle, so
-    // its start reaches the master immediately; once locked, it is the
-    // requester that won, so the rest of the burst stays with it.
-    wire [1:0] rd_sel = rd_req[0] ? 2'd0 :
-                        rd_req[1] ? 2'd1 :
-                        rd_req[2] ? 2'd2 : 2'd3;
-    wire [1:0] rd_grant = rd_locked ? rd_grant_r : rd_sel;
+    // Fixed priority over the PENDING bits: sequencer first, so a descriptor
+    // fetch is never held behind engine traffic.
+    wire [1:0] rd_pick = rd_pend[0] ? 2'd0 :
+                         rd_pend[1] ? 2'd1 :
+                         rd_pend[2] ? 2'd2 : 2'd3;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             rd_grant_r <= 2'd0;
             rd_locked  <= 1'b0;
-        end else if (!rd_locked) begin
-            if (|rd_req) begin
-                rd_grant_r <= rd_sel;
-                rd_locked  <= 1'b1;
+            rd_pend    <= 4'd0;
+            m_rd_start <= 1'b0;
+            m_rd_addr  <= 64'd0;
+            m_rd_len   <= 8'd0;
+        end else begin
+            m_rd_start <= 1'b0;
+
+            // Issue FIRST, so a start pulse arriving in the same cycle as a
+            // grant is still latched by the block below rather than cleared.
+            if (!rd_locked) begin
+                if (|rd_pend) begin
+                    rd_grant_r       <= rd_pick;
+                    rd_locked        <= 1'b1;
+                    rd_pend[rd_pick] <= 1'b0;
+                    m_rd_start       <= 1'b1;
+                    m_rd_addr        <= rd_addr_q[rd_pick];
+                    m_rd_len         <= rd_len_q[rd_pick];
+                end
+            end else if (m_rd_done) begin
+                rd_locked <= 1'b0;
             end
-        end else if (m_rd_done) begin
-            rd_locked <= 1'b0;
+
+            if (s0_rd_start) begin rd_pend[0] <= 1'b1; rd_addr_q[0] <= s0_rd_addr; rd_len_q[0] <= s0_rd_len; end
+            if (s1_rd_start) begin rd_pend[1] <= 1'b1; rd_addr_q[1] <= s1_rd_addr; rd_len_q[1] <= s1_rd_len; end
+            if (s2_rd_start) begin rd_pend[2] <= 1'b1; rd_addr_q[2] <= s2_rd_addr; rd_len_q[2] <= s2_rd_len; end
+            if (s3_rd_start) begin rd_pend[3] <= 1'b1; rd_addr_q[3] <= s3_rd_addr; rd_len_q[3] <= s3_rd_len; end
         end
     end
 
-    always @(*) begin
-        case (rd_grant)
-        2'd0: begin m_rd_start = s0_rd_start; m_rd_addr = s0_rd_addr; m_rd_len = s0_rd_len; end
-        2'd1: begin m_rd_start = s1_rd_start; m_rd_addr = s1_rd_addr; m_rd_len = s1_rd_len; end
-        2'd2: begin m_rd_start = s2_rd_start; m_rd_addr = s2_rd_addr; m_rd_len = s2_rd_len; end
-        default: begin m_rd_start = s3_rd_start; m_rd_addr = s3_rd_addr; m_rd_len = s3_rd_len; end
-        endcase
-    end
+    // Fanout follows the LOCKED grant. m_rd_start and rd_grant_r are set on the
+    // same edge, so the owner is correct when the first beat returns.
+    wire [1:0] rd_grant = rd_grant_r;
 
     // Read data fans out to everyone; only the granted requester's valid/done
     // strobes are asserted, so the others ignore the bus.
@@ -141,40 +180,61 @@ module yolo_axi_arbiter (
     reg [1:0] wr_grant_r;
     reg       wr_locked;
 
-    wire [3:0] wr_req = {s3_wr_start, s2_wr_start, s1_wr_start, s0_wr_start};
+    // Grant state, brought out for the host. Placed after BOTH lock registers
+    // are declared. A locked read grant held by an engine that is no longer
+    // running starves every other engine and looks exactly like the owner
+    // hanging, so the lock has to be observable from outside.
+    assign dbg_arb = {24'h0, wr_locked, wr_grant_r, 1'b0, rd_locked, rd_grant_r, 1'b0};
 
-    // Same single-cycle-pulse problem as the read channel above, and the same
-    // fix. This one was load-bearing: with the sequencer occupying slot 0 the
-    // grant sat at 0, the conv engine's slot-1 wr_start pulse never reached the
-    // master, and the engine parked in C_STORE_W forever on the first store of
-    // the first layer.
-    wire [1:0] wr_sel = wr_req[0] ? 2'd0 :
-                        wr_req[1] ? 2'd1 :
-                        wr_req[2] ? 2'd2 : 2'd3;
-    wire [1:0] wr_grant = wr_locked ? wr_grant_r : wr_sel;
+    reg [3:0]  wr_pend;
+    reg [63:0] wr_addr_q [0:3];
+    reg [7:0]  wr_len_q  [0:3];
+
+    wire [1:0] wr_pick = wr_pend[0] ? 2'd0 :
+                         wr_pend[1] ? 2'd1 :
+                         wr_pend[2] ? 2'd2 : 2'd3;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wr_grant_r <= 2'd0;
             wr_locked  <= 1'b0;
-        end else if (!wr_locked) begin
-            if (|wr_req) begin
-                wr_grant_r <= wr_sel;
-                wr_locked  <= 1'b1;
+            wr_pend    <= 4'd0;
+            m_wr_start <= 1'b0;
+            m_wr_addr  <= 64'd0;
+            m_wr_len   <= 8'd0;
+        end else begin
+            m_wr_start <= 1'b0;
+
+            if (!wr_locked) begin
+                if (|wr_pend) begin
+                    wr_grant_r       <= wr_pick;
+                    wr_locked        <= 1'b1;
+                    wr_pend[wr_pick] <= 1'b0;
+                    m_wr_start       <= 1'b1;
+                    m_wr_addr        <= wr_addr_q[wr_pick];
+                    m_wr_len         <= wr_len_q[wr_pick];
+                end
+            end else if (m_wr_done) begin
+                wr_locked <= 1'b0;
             end
-        end else if (m_wr_done) begin
-            wr_locked <= 1'b0;
+
+            if (s0_wr_start) begin wr_pend[0] <= 1'b1; wr_addr_q[0] <= s0_wr_addr; wr_len_q[0] <= s0_wr_len; end
+            if (s1_wr_start) begin wr_pend[1] <= 1'b1; wr_addr_q[1] <= s1_wr_addr; wr_len_q[1] <= s1_wr_len; end
+            if (s2_wr_start) begin wr_pend[2] <= 1'b1; wr_addr_q[2] <= s2_wr_addr; wr_len_q[2] <= s2_wr_len; end
+            if (s3_wr_start) begin wr_pend[3] <= 1'b1; wr_addr_q[3] <= s3_wr_addr; wr_len_q[3] <= s3_wr_len; end
         end
     end
+
+    wire [1:0] wr_grant = wr_grant_r;
 
     // The byte strobe follows the granted requester exactly like wr_data --
     // it is part of the beat, not of the address phase.
     always @(*) begin
         case (wr_grant)
-        2'd0: begin m_wr_start = s0_wr_start; m_wr_addr = s0_wr_addr; m_wr_len = s0_wr_len; m_wr_data = s0_wr_data; m_wr_strb = s0_wr_strb; end
-        2'd1: begin m_wr_start = s1_wr_start; m_wr_addr = s1_wr_addr; m_wr_len = s1_wr_len; m_wr_data = s1_wr_data; m_wr_strb = s1_wr_strb; end
-        2'd2: begin m_wr_start = s2_wr_start; m_wr_addr = s2_wr_addr; m_wr_len = s2_wr_len; m_wr_data = s2_wr_data; m_wr_strb = s2_wr_strb; end
-        default: begin m_wr_start = s3_wr_start; m_wr_addr = s3_wr_addr; m_wr_len = s3_wr_len; m_wr_data = s3_wr_data; m_wr_strb = s3_wr_strb; end
+        2'd0: begin m_wr_data = s0_wr_data; m_wr_strb = s0_wr_strb; end
+        2'd1: begin m_wr_data = s1_wr_data; m_wr_strb = s1_wr_strb; end
+        2'd2: begin m_wr_data = s2_wr_data; m_wr_strb = s2_wr_strb; end
+        default: begin m_wr_data = s3_wr_data; m_wr_strb = s3_wr_strb; end
         endcase
     end
 

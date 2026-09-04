@@ -148,6 +148,14 @@ module axi_to_avalon #(
             R_DATA: begin
                 // The accelerator's read consumers hold rready high, so a
                 // registered pass-through is enough; no skid buffer needed.
+                // s_rvalid becomes visible the cycle AFTER it is set and is
+                // cleared at the end of that same cycle, so each beat is
+                // offered for exactly one accepted cycle -- back-to-back data
+                // simply overwrites it and rvalid stays high, which is still
+                // one accept per word.
+                //
+                // tb_desc_fetch pins this down: beat count and rlast position
+                // for 2-, 8- and 32-beat bursts through the real sdram_ctrl.
                 if (m_rd_data_valid) begin
                     s_rdata  <= m_rd_data;
                     s_rid    <= r_id;

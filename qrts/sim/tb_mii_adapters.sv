@@ -1,7 +1,7 @@
 // =============================================================================
 // tb_mii_adapters.sv — MII nibble/byte adapters across their clock crossings
 //
-// These sit between the byte-wide MACs and the 4-bit ENET0 pins. A bug here is
+// These sit between the byte-wide MACs and the 4-bit ENET1 pins. A bug here is
 // the worst kind to find on the bench: a dropped or duplicated byte fails the
 // FCS, so the symptom is "some frames don't arrive" -- indistinguishable from a
 // bad cable, a PHY strap, or a switch dropping runts.

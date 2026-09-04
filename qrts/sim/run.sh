@@ -46,7 +46,12 @@ echo
 echo "== dvcon_top elaborates =="
 # dvcon_top instantiates Accelerator_Top whole, so the whole core is needed --
 # it is not a leaf any more.
-xvlog -sv -i "$QRTS/rtl/core"     "$QRTS"/rtl/core/*.sv     "$QRTS"/rtl/platform/*.sv     "$QRTS"/rtl/eth/*.sv >/dev/null
+# rtl/mem holds avalon_arbiter and sdram_ctrl, and sld_virtual_jtag is an
+# Altera megafunction xsim does not have -- sim/ carries a stub for it. Both
+# were missing here, so xelab failed, and because this step redirects to
+# /dev/null under `set -e` the whole suite aborted with no message. Every
+# testbench below it had stopped running.
+xvlog -sv -i "$QRTS/rtl/core" "$QRTS"/rtl/core/*.sv "$QRTS"/rtl/platform/*.sv 	"$QRTS"/rtl/eth/*.sv "$QRTS"/rtl/mem/*.sv "$HERE/sld_virtual_jtag_stub.sv"
 xelab work.dvcon_top -s dtop >/dev/null
 echo "   ok"
 echo
@@ -88,6 +93,31 @@ xvlog -sv "$QRTS/rtl/eth/crc32_eth.sv" "$HERE/tb_crc32_eth.sv" >/dev/null
 xelab work.tb_crc32_eth -s tbcrc >/dev/null
 xsim tbcrc -R | tee tb_crc32_eth.log
 grep -q "PASSED" tb_crc32_eth.log || { echo "  FAILED"; fail=1; }
+
+echo
+# ---- ethernet writes under backpressure ------------------------------------
+# tb_eth_cmd and tb_eth_path both hold avm_waitrequest LOW for the whole run,
+# so neither ever exercised what happens to a packed word when the SDRAM is
+# busy -- which on the board it often is. The engine used to overwrite the
+# pending write, losing the word silently; this bench measured 212 of 518
+# payload bytes never reaching memory. It is the regression for the write queue.
+echo "== ethernet writes under backpressure =="
+xvlog -sv "$QRTS"/rtl/eth/*.sv "$HERE/tb_eth_stall.sv" >/dev/null
+xelab work.tb_eth_stall -s tbstall >/dev/null
+xsim tbstall -R | tee tb_eth_stall.log
+grep -q "PASSED" tb_eth_stall.log || { echo "  FAILED"; fail=1; }
+
+echo
+# ---- the whole descriptor read path ----------------------------------------
+# tb_desc_fetch drives the AXI side from the bench, which leaves the half of the
+# path inside the accelerator untested: two AXI translations and two arbiters.
+# This walks a known ramp from yolo_layer_sequencer all the way to sdram_ctrl.
+# It is what establishes that a wrong descriptor on the board is NOT a logic bug.
+echo "== descriptor path, sequencer to SDRAM =="
+xvlog -sv -i "$QRTS/rtl/core" "$QRTS"/rtl/core/*.sv 	"$QRTS/rtl/platform/avalon_mm_master.sv" 	"$QRTS/rtl/platform/axi_to_avalon.sv" 	"$QRTS"/rtl/mem/*.sv "$HERE/sdram_model.sv" 	"$HERE/tb_desc_path.sv" >/dev/null
+xelab work.tb_desc_path -s tbdpath >/dev/null
+xsim tbdpath -R | tee tb_desc_path.log
+grep -q "PASSED" tb_desc_path.log || { echo "  FAILED"; fail=1; }
 
 echo
 echo "== ethernet MAC loopback =="

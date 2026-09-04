@@ -47,6 +47,9 @@ module tb_arbiter;
     // ---- master 2: the JTAG read window ----
     reg  [31:0] m2_address = '0;
     reg         m2_read    = 1'b0;
+    reg         m2_write   = 1'b0;
+    reg  [31:0] m2_writedata  = '0;
+    reg  [3:0]  m2_byteenable = 4'hF;
     wire [31:0] m2_readdata;
     wire        m2_readdatavalid, m2_waitrequest;
 
@@ -67,6 +70,8 @@ module tb_arbiter;
         .m1_burstcount(m1_burstcount), .m1_readdata(m1_readdata),
         .m1_readdatavalid(m1_readdatavalid), .m1_waitrequest(m1_waitrequest),
         .m2_address(m2_address), .m2_read(m2_read),
+        .m2_write(m2_write), .m2_writedata(m2_writedata),
+        .m2_byteenable(m2_byteenable),
         .m2_readdata(m2_readdata), .m2_readdatavalid(m2_readdatavalid),
         .m2_waitrequest(m2_waitrequest),
         .s_address(s_address), .s_read(s_read), .s_write(s_write),
@@ -84,7 +89,7 @@ module tb_arbiter;
 
     sdram_ctrl #(.T_INIT(20), .T_REFI(2000)) u_sdram (
         .clk(clk), .rst_n(rst_n),
-        .avs_address(s_address[24:0]), .avs_read(s_read), .avs_write(s_write),
+        .cap_sel(2'd1), .avs_address(s_address[24:0]), .avs_read(s_read), .avs_write(s_write),
         .avs_writedata(s_writedata), .avs_byteenable(s_byteenable),
         .avs_burstcount(s_burstcount),
         .avs_readdata(s_readdata), .avs_readdatavalid(s_readdatavalid),
@@ -199,6 +204,20 @@ module tb_arbiter;
 
     // Master 2 reads a single word, the way jtag_ctrl does.
     reg [31:0] m2_word;
+    // Master 2 can write now -- this is the path that loads the model blob
+    // when Ethernet is unavailable, so it needs the same read-back proof the
+    // other two masters get.
+    task automatic m2_wr1(input [24:0] addr, input [31:0] data);
+        begin
+            @(negedge clk);
+            m2_address = addr; m2_writedata = data; m2_write = 1'b1;
+            @(posedge clk);
+            while (m2_waitrequest) @(posedge clk);
+            @(negedge clk);
+            m2_write = 1'b0;
+        end
+    endtask
+
     task automatic m2_rd1(input [24:0] addr);
         begin
             @(negedge clk);
@@ -274,6 +293,14 @@ module tb_arbiter;
         m2_rd1(25'h00_4000);
         check("m2 reads m1's data", m2_word, 32'hD000_0000);
 
+        // m2 write, then read it back through m2 and through m0, so the data
+        // is proven to be in the memory and not in a bypass path.
+        m2_wr1(25'h00_8000, 32'hFEED_1234);
+        m2_rd1(25'h00_8000);
+        check("m2 reads back its own write", m2_word, 32'hFEED_1234);
+        m0_rd(25'h00_8000, 1);
+        check("m0 sees m2's write", m0_buf[0], 32'hFEED_1234);
+
         // -- 5. no protocol violations from the interleaving ------------------
         if (mem.errors != 0) begin
             $display("  FAIL model reported %0d protocol violation(s)",
@@ -289,7 +316,11 @@ module tb_arbiter;
     end
 
     initial begin
-        #3000000;
+        // 3 ms was just enough for the tests that existed, so adding the
+        // master-2 write case pushed the last check past the deadline and it
+        // reported as a hang rather than as "out of time". Real SDRAM timing
+        // at these parameters is slow; leave headroom.
+        #6000000;
         $display("=== FAILED: timeout ===");
         $finish;
     end

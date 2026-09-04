@@ -12,6 +12,13 @@ arbitrary placement drives a real signal.
 
 This checks both directions, plus that every port has an I/O standard.
 
+It also checks that every port named in dvcon.sdc still exists. `get_ports` on
+a name that is not there returns an EMPTY collection, and create_clock on an
+empty collection creates nothing -- silently. Renaming the Ethernet ports from
+ENET0_* to ENET1_* left both PHY clocks undeclared that way, which does not
+fail the build: it removes them from timing analysis altogether, along with
+every exception written against them.
+
 It also checks every location against the Terasic pin table in
 resources/DE2-115 Pin Assignments.csv. That is the check that matters: the
 consistency checks above pass happily on a pin that is legal, in the right
@@ -32,6 +39,7 @@ QRTS = HERE.parent
 TOP_SV = QRTS / "rtl" / "platform" / "dvcon_top.sv"
 PIN_TCL = QRTS / "pin" / "de2_115_pins.tcl"
 QSF     = QRTS / "quartus" / "dvcon.qsf"
+SDC     = QRTS / "quartus" / "dvcon.sdc"
 REF_CSV = QRTS / "resources" / "DE2-115 Pin Assignments.csv"
 
 
@@ -128,6 +136,28 @@ def volts(std):
     return float(m.group(1)) if m else None
 
 
+
+def parse_sdc_ports(path):
+    """Port names referenced by get_ports in the SDC, base names only.
+
+    Commented lines are skipped -- the SDC carries several blocks of
+    deliberately disabled input/output delay constraints, and flagging those
+    would train the reader to ignore this check.
+    """
+    if not path.exists():
+        return set()
+    names = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        code = line.split("#", 1)[0]
+        for m in re.finditer(r"get_ports\s*(?:\{([^}]*)\}|(\S+?)\s*\])", code):
+            blob = m.group(1) or m.group(2) or ""
+            for tok in blob.replace("]", " ").split():
+                base = tok.split("[")[0].strip()
+                if base and not base.startswith("*"):
+                    names.add(base)
+    return names
+
+
 def main():
     ports = parse_ports(TOP_SV)
     locs, stds = parse_pins(PIN_TCL)
@@ -170,6 +200,15 @@ def main():
             if extra:
                 print(f"  [err] port '{name}' has unexpected {sorted(extra)}")
                 problems += 1
+
+    # 3b. SDC references. An SDC naming a port that no longer exists does not
+    # fail anything -- get_ports returns empty and the constraint evaporates,
+    # taking the clock definition and its exceptions with it.
+    for name in sorted(parse_sdc_ports(SDC)):
+        if name not in ports:
+            print(f"  [err] dvcon.sdc constrains '{name}', which is not a "
+                  f"dvcon_top port -- the constraint is silently doing nothing")
+            problems += 1
 
     # 4. Duplicate pins: two ports on one ball is a short.
     seen = {}

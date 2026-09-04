@@ -74,6 +74,22 @@ module sdram_ctrl #(
     output reg                      avs_readdatavalid,
     output wire                     avs_waitrequest,
 
+    // ---- read capture tap ---------------------------------------------------
+    // Which stage of the CAS pipeline actually latches DQ. 1 is the nominal
+    // CAS_LAT and is what reset selects, so leaving this alone reproduces the
+    // fixed behaviour exactly.
+    //
+    // It is adjustable because the nominal value is only correct if the round
+    // trip fits the budget, and on this board that budget is 4.6 ns at the pin
+    // before any routing (quartus/dvcon.sdc works it through). Whether it fits
+    // is a property of the fitted design, not of this RTL: simulation cannot
+    // answer it -- sim/tb_desc_path.sv walks a ramp through the entire path and
+    // reproduces it exactly, while the board returns the descriptor skewed by a
+    // word. Sweeping this from the host finds the tap that reads a known
+    // pattern back correctly in one programming run, instead of one full
+    // resynthesis per guess.
+    input  wire [1:0]               cap_sel,
+
     // ---- SDRAM pins ---------------------------------------------------------
     // DQ is split into in/out/oe rather than an inout so this module stays
     // synthesisable and testable without a tristate in the middle of it; the
@@ -143,14 +159,33 @@ module sdram_ctrl #(
     // Accept a request only when parked in S_IDLE with no refresh pending, and
     // during the data phase of a write burst.
     wire idle_ready = (state == S_IDLE) && !refresh_req && (wait_cnt == 0);
-    assign avs_waitrequest = !(idle_ready || (state == S_WR && wait_cnt == 0));
+    // The S_WR term means "ready for the next BEAT of the burst in progress",
+    // but waitrequest is also what a master reads as "ready for a new command".
+    // Without the r_left test those are the same signal on the LAST beat, so a
+    // command issued there is swallowed as write data and never executes.
+    //
+    // Masters 0 and 1 only ever wrote full bursts, where the extra beats really
+    // were theirs, so this never fired. The JTAG loader writes SINGLE beats and
+    // then reads back -- the read landed while state was still S_WR and no read
+    // data was ever returned. Caught by tb_arbiter's master-2 read-back check.
+    assign avs_waitrequest =
+        !(idle_ready || (state == S_WR && wait_cnt == 0 && r_left > 1));
 
     // ---- CAS-latency read pipeline ------------------------------------------
     // Data returns CAS_LAT cycles after the READ command. This shift register
     // marks which cycles carry valid data; getting the depth wrong shifts every
     // read by a word, which presents as memory corruption rather than a
     // latency bug.
-    reg [CAS_LAT:0] rd_pipe;
+    // Two stages deeper than CAS_LAT so cap_sel can look later as well as
+    // earlier. The extra stages cost four flip-flops and are what make the tap
+    // sweepable at all.
+    localparam integer PIPE_TOP = CAS_LAT + 2;
+    reg [PIPE_TOP:0] rd_pipe;
+
+    // cap_sel 0..3 -> tap CAS_LAT-1 .. CAS_LAT+2. Reset picks 1 = CAS_LAT.
+    wire [PIPE_TOP:0] tap_onehot = {{PIPE_TOP{1'b0}}, 1'b1} <<
+                                   (CAS_LAT - 1 + cap_sel);
+    wire cap_now = |(rd_pipe & tap_onehot);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -201,9 +236,9 @@ module sdram_ctrl #(
             // either one an edge off returns the neighbouring word, which
             // presents as memory corruption rather than a latency bug -- the
             // bench catches it by reading back a known pattern.
-            rd_pipe           <= {rd_pipe[CAS_LAT-1:0], 1'b0};
-            avs_readdatavalid <= rd_pipe[CAS_LAT];
-            if (rd_pipe[CAS_LAT]) avs_readdata <= dram_dq_in;
+            rd_pipe           <= {rd_pipe[PIPE_TOP-1:0], 1'b0};
+            avs_readdatavalid <= cap_now;
+            if (cap_now) avs_readdata <= dram_dq_in;
 
             if (wait_cnt != 0) begin
                 wait_cnt <= wait_cnt - 1'b1;

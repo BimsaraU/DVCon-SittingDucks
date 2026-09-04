@@ -184,9 +184,47 @@ module avalon_mm_master #(
                 avm_read       <= 1'b1;
                 if (avm_read && !avm_waitrequest) begin
                     avm_read      <= 1'b0;
-                    rd_burst_left <= rd_this[15:0];
                     rd_ptr        <= rd_ptr + (rd_this * (DATA_WIDTH/8));
                     rd_state      <= RD_DATA;
+
+                    // THE FIRST BEAT CAN ARRIVE IN THIS VERY CYCLE.
+                    //
+                    // Avalon does not require readdatavalid to wait for the
+                    // cycle after acceptance, and sdram_ctrl on the board
+                    // returns it immediately when the row is already open.
+                    // Capturing beats only in RD_DATA therefore DROPS that
+                    // first beat, and because SUB=2 packs two Avalon beats
+                    // into one engine word, everything after it is shifted by
+                    // one 32-bit word for the rest of the burst.
+                    //
+                    // On hardware that made the sequencer read desc[0] out of
+                    // the descriptor's WORD 1: flags (2) instead of op (1), so
+                    // every layer dispatched to the elementwise engine and
+                    // desc[4] (dst) came back 0, sending conv output to
+                    // address 0 and over the descriptor table. sdram_model in
+                    // simulation always takes an extra cycle, which is why
+                    // every bench passed.
+                    if (avm_readdatavalid) begin
+                        rd_acc[rd_sub*DATA_WIDTH +: DATA_WIDTH] <= avm_readdata;
+                        rd_burst_left <= rd_this[15:0] - 16'd1;
+                        rd_av_left    <= rd_av_left - 16'd1;
+
+                        if (SUB == 1 || rd_sub == SUB-1) begin
+                            rd_sub  <= '0;
+                            rd_data <= (SUB == 1)
+                                     ? {{(CORE_WIDTH-DATA_WIDTH){1'b0}}, avm_readdata}
+                                     : {avm_readdata,
+                                        rd_acc[CORE_WIDTH-DATA_WIDTH-1:0]};
+                            rd_data_valid <= 1'b1;
+                        end else begin
+                            rd_sub <= rd_sub + 1'b1;
+                        end
+
+                        if (rd_av_left == 16'd1)          rd_state <= RD_DONE;
+                        else if (rd_this[15:0] == 16'd1)  rd_state <= RD_REQ;
+                    end else begin
+                        rd_burst_left <= rd_this[15:0];
+                    end
                 end
             end
 

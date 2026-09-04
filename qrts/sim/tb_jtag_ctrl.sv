@@ -38,6 +38,11 @@ module tb_jtag_ctrl;
         if (mem_read) mem_readdata <= 32'hBB00_0000 | mem_address;
     end
 
+    // Descriptor readback model: the value is derived from the index, so a
+    // select that never reaches the mux shows as the wrong word.
+    wire [3:0]  dbg_desc_sel;
+    wire [31:0] dbg_desc_val = 32'hA000_0000 + dbg_desc_sel;
+
     jtag_ctrl dut (
         .clk(clk), .rst_n(rst_n),
         .avm_address(avm_address), .avm_read(avm_read), .avm_write(avm_write),
@@ -48,8 +53,15 @@ module tb_jtag_ctrl;
         .mem_readdatavalid(mem_readdatavalid),
         .mem_waitrequest(1'b0),
         .eth_good(32'h0000_1234), .eth_bad(32'h0000_0005),
-        .eth_frames(32'h0000_00AB), .eth_bitmap(64'h0000_0000_DEAD_F00D)
+        .eth_frames(32'h0000_00AB), .eth_bitmap(64'h0000_0000_DEAD_F00D),
+        .eth_wdrop(32'h0000_0007),
+        // Descriptor readback window. The model below returns a value derived
+        // from the index, so a select that does not reach the mux -- or one
+        // that reaches it a cycle late -- shows as the wrong word rather than
+        // as no answer at all.
+        .dbg_desc_sel(dbg_desc_sel), .dbg_desc_val(dbg_desc_val)
     );
+
 
     // ---- model register file ------------------------------------------------
     // Stalls for a couple of cycles so the bench exercises waitrequest rather
@@ -178,6 +190,19 @@ module tb_jtag_ctrl;
         jt_read(6'h3B, rd);  check("ETH_BAD",    rd, 32'h0000_0005);
         jt_read(6'h3C, rd);  check("ETH_CMD",    rd, 32'h0000_00AB);
         jt_read(6'h3D, rd);  check("ETH_BITMAP", rd, 32'hDEAD_F00D);
+        jt_read(6'h36, rd);  check("ETH_DROP",   rd, 32'h0000_0007);
+
+        // ---- descriptor readback window --------------------------------
+        // Poke the index, peek the word. Checking more than one index is the
+        // point: a select stuck at zero answers the first probe correctly and
+        // every later one wrongly, which is exactly the failure that would
+        // make this window lie about the very skew it exists to measure.
+        jt_write(6'h34, 32'd0);  jt_read(6'h35, rd);
+        check("DESC[0]",  rd, 32'hA000_0000);
+        jt_write(6'h34, 32'd7);  jt_read(6'h35, rd);
+        check("DESC[7]",  rd, 32'hA000_0007);
+        jt_write(6'h34, 32'd15); jt_read(6'h35, rd);
+        check("DESC[15]", rd, 32'hA000_000F);
 
         jt_read(6'h07, rd);
         check("register path still works after", rd, 32'h0040_0000);

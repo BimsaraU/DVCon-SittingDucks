@@ -152,7 +152,40 @@ module Accelerator_Top #(
     output wire [63:0]  s_axi_rdata,
     output wire [1:0]   s_axi_rresp,
     output wire         s_axi_rlast,
-    output wire         s_axi_rvalid
+    output wire         s_axi_rvalid,
+
+    // ---- observability, output only -------------------------------------
+    // Driven onto the DE2-115's LEDs and readable over JTAG. Nothing inside
+    // reads these back, so they cannot affect behaviour.
+    output wire [7:0]   dbg_engine,     // per-engine activity, see dvcon_top
+    output wire [15:0]  dbg_layer,      // descriptor index being executed
+    output wire         dbg_busy,       // a network run is in progress
+    // What the sequencer decoded out of the current descriptor and handed to
+    // the conv engine. On the board the engine was writing to address 0
+    // instead of its dst, and there was no way to tell whether the descriptor
+    // field was misread or the engine ignored it.
+    output wire [31:0]  dbg_ce_src,
+    output wire [31:0]  dbg_ce_dst,
+
+    // Descriptor readback: the word the sequencer LATCHED at index
+    // dbg_desc_sel. The descriptor path is clean in simulation
+    // (qrts/sim/tb_desc_path.sv walks a known ramp through both AXI
+    // translations and both arbiters and reproduces it exactly) and wrong on
+    // the DE2-115 board, so telling a dropped burst beat from a mis-timed SDRAM
+    // capture needs the whole latched array visible to the host.
+    input  wire [3:0]   dbg_desc_sel,
+    output wire [31:0]  dbg_desc_val,
+
+    // Conv engine internals, for telling a memory stall apart from a loop
+    // that is not advancing when the sequencer sits in CONV_W.
+    output wire [31:0]  dbg_conv0,
+    output wire [31:0]  dbg_conv1,
+    // Elem engine state and the internal arbiter's grant lock. LEDR shows
+    // ee_busy and ce_busy together while the sequencer waits in CONV_W, and
+    // those two words are what separate "elem still running" from "elem left
+    // busy set" from "the read grant is locked to an idle engine".
+    output wire [31:0]  dbg_elem,
+    output wire [31:0]  dbg_arb
 );
 
     localparam integer DATA_WIDTH = 8;
@@ -311,6 +344,7 @@ module Accelerator_Top #(
 
     yolo_axi_arbiter u_arb (
         .clk(clk), .rst_n(rst_n),
+        .dbg_arb(dbg_arb),
         .s0_rd_start(a0_rd_start), .s0_rd_addr(a0_rd_addr), .s0_rd_len(a0_rd_len),
         .s0_rd_data(a0_rd_data), .s0_rd_data_valid(a0_rd_data_valid),
         .s0_rd_done(a0_rd_done), .s0_rd_error(a0_rd_error),
@@ -489,6 +523,7 @@ module Accelerator_Top #(
         .ARRAY_SIZE(ARRAY_SIZE), .DATA_WIDTH(DATA_WIDTH), .ACC_WIDTH(ACC_WIDTH)
     ) u_seq (
         .clk(clk), .rst_n(rst_n),
+        .dbg_desc_sel(dbg_desc_sel), .dbg_desc_val(dbg_desc_val),
         .start_pulse(start_seq),
         .desc_base(desc_addr), .img_addr(img_addr), .out_addr(box_addr),
         .busy(sq_busy), .done(sq_done), .error(sq_error),
@@ -649,6 +684,7 @@ module Accelerator_Top #(
         .ARRAY_SIZE(ARRAY_SIZE), .DATA_WIDTH(DATA_WIDTH), .ACC_WIDTH(ACC_WIDTH)
     ) u_conv (
         .clk(clk), .rst_n(rst_n),
+        .dbg_conv0(dbg_conv0), .dbg_conv1(dbg_conv1),
         .start(ce_start),
         .src_addr(ce_src), .dst_addr(ce_dst), .wgt_addr(ce_wgt),
         .bias_addr(ce_bias),
@@ -678,6 +714,7 @@ module Accelerator_Top #(
     // =========================================================================
     yolo_elem_engine #(.DATA_WIDTH(DATA_WIDTH)) u_elem (
         .clk(clk), .rst_n(rst_n),
+        .dbg_elem(dbg_elem),
         .start(ee_start), .op(ee_op),
         .src0(ee_src0), .src1(ee_src1), .dst(ee_dst),
         .in_w(ee_in_w), .in_h(ee_in_h), .in_c(ee_in_c), .in_c1(ee_in_c1),
@@ -740,5 +777,17 @@ module Accelerator_Top #(
         .s_arvalid(), .s_araddr(), .s_arready(1'b0),
         .s_rready(), .s_rvalid(1'b0), .s_rdata(32'h0), .s_rresp(2'b00)
     );
+
+    // ---- observability -------------------------------------------------
+    // Placed at the end of the module so every signal referenced here is
+    // already declared.
+    assign dbg_engine = {ce_error | ee_error | de_error,
+                         de_busy, ee_busy, ce_busy,
+                         |result_valid, streaming_acts, loading_weights,
+                         sys_busy};
+    assign dbg_layer  = seq_layer;
+    assign dbg_busy   = st_busy;
+    assign dbg_ce_src = sq_ce_src;
+    assign dbg_ce_dst = sq_ce_dst;
 
 endmodule

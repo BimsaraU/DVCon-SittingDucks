@@ -4,7 +4,7 @@
 // Replaces Accelerator_Top's ROLE as the chip top, not Accelerator_Top itself:
 // the accelerator is instantiated here unchanged, with shims either side.
 //
-//     ENET0 --- mii_rx/tx --- eth_mac_rx/tx --- eth_cmd_engine ---+
+//     ENET1 --- mii_rx/tx --- eth_mac_rx/tx --- eth_cmd_engine ---+
 //                                                                  |
 //     JTAG --- jtag_ctrl --- dvcon_regs ---AXI--> Accelerator_Top   |
 //                                                        |          |
@@ -67,16 +67,22 @@ module dvcon_top #(
     inout  wire [31:0] DRAM_DQ,
     output wire [3:0]  DRAM_DQM,
 
-    // ---- Ethernet PHY 0 (Marvell 88E1111), RGMII ----
-    output wire        ENET0_GTX_CLK,
-    input  wire        ENET0_RX_CLK,
-    input  wire [3:0]  ENET0_RX_DATA,
-    input  wire        ENET0_RX_DV,
-    output wire [3:0]  ENET0_TX_DATA,
-    output wire        ENET0_TX_EN,
-    output wire        ENET0_RST_N,
-    inout  wire        ENET0_MDIO,
-    output wire        ENET0_MDC,
+    // ---- Ethernet PHY 1 (Marvell 88E1111, connector J5), MII ----
+    // ENET1, not ENET0. The 88E1111's interface mode is strapped by a jumper
+    // at power-on -- JP1 for PHY 0, JP2 for PHY 1, short 2-3 for MII. JP1 was
+    // not reachable on this board, so JP2 was moved and the cable went into
+    // J5. Both PHYs are the same part on the same nets; only the pin
+    // assignments differ (see pin/de2_115_pins.tcl).
+    output wire        ENET1_GTX_CLK,
+    input  wire        ENET1_TX_CLK,
+    input  wire        ENET1_RX_CLK,
+    input  wire [3:0]  ENET1_RX_DATA,
+    input  wire        ENET1_RX_DV,
+    output wire [3:0]  ENET1_TX_DATA,
+    output wire        ENET1_TX_EN,
+    output wire        ENET1_RST_N,
+    inout  wire        ENET1_MDIO,
+    output wire        ENET1_MDC,
 
     // ---- status ----
     output wire [17:0] LEDR,
@@ -107,32 +113,34 @@ module dvcon_top #(
     // =========================================================================
     // Ethernet: MII front end, MAC, command engine
     //
-    //   ENET0 pins --4-bit--> mii_rx_adapter --byte--> eth_mac_rx
+    //   ENET1 pins --4-bit--> mii_rx_adapter --byte--> eth_mac_rx
     //                                                       |
     //                                              eth_cmd_engine --Avalon--> SDRAM
     //                                                       |
-    //   ENET0 pins <--4-bit-- mii_tx_adapter <--byte-- eth_mac_tx
+    //   ENET1 pins <--4-bit-- mii_tx_adapter <--byte-- eth_mac_tx
     //
-    // MII, not RGMII: the pin the board labels ENET0_GTX_CLK is the 88E1111's
-    // transmit clock, 25 MHz in MII mode and 125 MHz in GMII/RGMII. It is an
-    // output either way. 100 Mbit is enough here -- the largest transfer is the
+    // MII, not RGMII. 100 Mbit is enough here -- the largest transfer is the
     // 2.8 MB model blob, about a quarter of a second, once at startup.
+    //
+    // The transmit clock comes FROM the PHY on ENET1_TX_CLK (PIN_C22), which
+    // the DE2-115 manual lists as "MII transmit clock". This used to drive
+    // ENET1_GTX_CLK (PIN_C23) with a locally divided 25 MHz instead -- but the
+    // manual calls that the "GMII transmit clock", used only in GMII/RGMII. In
+    // MII the 88E1111 samples TXD against the clock it generates, so the board
+    // could never transmit, and the MII clock was not even a port.
+    //
+    // NOTE: the PHY only sources this clock in MII mode, which for PHY 1 is
+    // JP2 shorted 2-3. The board ships in RGMII (JP2 1-2), and there TX_CLK is
+    // silent and nothing is sent. Moving the jumper needs a hardware reset.
     // =========================================================================
-
-    // 25 MHz from the 50 MHz system clock: an exact divide by two.
-    reg eth_tx_clk;
-    always @(posedge clk_sys or negedge rst_n) begin
-        if (!rst_n) eth_tx_clk <= 1'b0;
-        else        eth_tx_clk <= ~eth_tx_clk;
-    end
 
     wire [7:0] rx_byte;
     wire       rx_valid;
     wire       rx_last;
 
     mii_rx_adapter u_mii_rx (
-        .rx_clk(ENET0_RX_CLK), .rst_n(rst_n),
-        .mii_rxd(ENET0_RX_DATA), .mii_rx_dv(ENET0_RX_DV),
+        .rx_clk(ENET1_RX_CLK), .rst_n(rst_n),
+        .mii_rxd(ENET1_RX_DATA), .mii_rx_dv(ENET1_RX_DV),
         .clk(clk_sys),
         .out_data(rx_byte), .out_valid(rx_valid), .out_last(rx_last)
     );
@@ -160,7 +168,7 @@ module dvcon_top #(
     wire [6:0]  eth_avm_burstcount;
     wire        eth_avm_waitrequest;
 
-    wire [31:0] stat_frames, stat_bytes;
+    wire [31:0] stat_frames, stat_bytes, stat_wdrop;
     wire [63:0] rx_bitmap;
 
     eth_cmd_engine #(.MAC_ADDR(MAC_ADDR)) u_cmd (
@@ -175,6 +183,7 @@ module dvcon_top #(
         .avm_burstcount(eth_avm_burstcount),
         .avm_waitrequest(eth_avm_waitrequest),
         .stat_frames(stat_frames), .stat_bytes(stat_bytes),
+        .stat_wdrop(stat_wdrop),
         .rx_bitmap(rx_bitmap)
     );
 
@@ -191,19 +200,21 @@ module dvcon_top #(
     mii_tx_adapter u_mii_tx (
         .clk(clk_sys), .rst_n(rst_n),
         .in_data(tx_byte), .in_valid(tx_en), .in_ready(),
-        .tx_clk(eth_tx_clk),
-        .mii_txd(ENET0_TX_DATA), .mii_tx_en(ENET0_TX_EN)
+        .tx_clk(ENET1_TX_CLK),
+        .mii_txd(ENET1_TX_DATA), .mii_tx_en(ENET1_TX_EN)
     );
 
-    // In MII mode the FPGA supplies the transmit clock on this pin.
-    assign ENET0_GTX_CLK = eth_tx_clk;
+    // Unused in MII: the PHY drives TXD off its own ENET1_TX_CLK. Held low
+    // rather than left floating, and rather than driven with a 25 MHz clock
+    // the PHY ignores in this mode.
+    assign ENET1_GTX_CLK = 1'b0;
 
     // PHY out of reset. MDIO is left idle: the 88E1111 powers up in
     // auto-negotiation with its strap defaults, which is what is wanted here --
     // MDIO would only be needed to force a mode or read link status.
-    assign ENET0_RST_N   = rst_n;
-    assign ENET0_MDC     = 1'b0;
-    assign ENET0_MDIO    = 1'bz;
+    assign ENET1_RST_N   = rst_n;
+    assign ENET1_MDC     = 1'b0;
+    assign ENET1_MDIO    = 1'bz;
 
     // =========================================================================
     // Control registers
@@ -238,8 +249,19 @@ module dvcon_top #(
 
     wire [31:0] jt_mem_address;
     wire        jt_mem_read;
+    wire        jt_mem_write;
+    wire [31:0] jt_mem_writedata;
+    wire [3:0]  jt_mem_byteenable;
     wire [31:0] jt_mem_readdata;
     wire        jt_mem_readdatavalid, jt_mem_waitrequest;
+
+    // Driven by the accelerator (instantiated below), read by jtag_ctrl
+    // here -- so the declaration has to precede the first consumer.
+    wire [31:0] ac_dbg_ce_src, ac_dbg_ce_dst;
+    wire [3:0]  dbg_desc_sel;
+    wire [1:0]  sdram_cap_sel;
+    wire [31:0] ac_dbg_conv0, ac_dbg_conv1, ac_dbg_elem, ac_dbg_arb;
+    wire [31:0] ac_dbg_desc_val;
 
     jtag_ctrl u_jtag (
         .clk(clk_sys), .rst_n(rst_n),
@@ -247,12 +269,21 @@ module dvcon_top #(
         .avm_writedata(jt_writedata),
         .avm_readdata(regs_readdata), .avm_waitrequest(regs_waitrequest),
         .mem_address(jt_mem_address), .mem_read(jt_mem_read),
+        .mem_write(jt_mem_write), .mem_writedata(jt_mem_writedata),
+        .mem_byteenable(jt_mem_byteenable),
         .mem_readdata(jt_mem_readdata),
         .mem_readdatavalid(jt_mem_readdatavalid),
         .mem_waitrequest(jt_mem_waitrequest),
         // Link diagnostics, readable over JTAG at 0x3A..0x3D.
         .eth_good(stat_good), .eth_bad(stat_bad_fcs),
-        .eth_frames(stat_frames), .eth_bitmap(rx_bitmap)
+        .eth_filtered(stat_filtered),
+        .dbg_ce_src(ac_dbg_ce_src), .dbg_ce_dst(ac_dbg_ce_dst),
+        .eth_frames(stat_frames), .eth_bitmap(rx_bitmap),
+        .eth_wdrop(stat_wdrop),
+        .dbg_desc_sel(dbg_desc_sel), .dbg_desc_val(ac_dbg_desc_val),
+        .dbg_conv0(ac_dbg_conv0), .dbg_conv1(ac_dbg_conv1),
+        .dbg_elem(ac_dbg_elem), .dbg_arb(ac_dbg_arb),
+        .sdram_cap_sel(sdram_cap_sel)
     );
 
     dvcon_regs #(.ARRAY_SIZE(ARRAY_SIZE)) u_regs (
@@ -295,8 +326,18 @@ module dvcon_top #(
     wire        ac_rready, ac_rvalid; wire [11:0] ac_rid;
     wire [63:0] ac_rdata; wire [1:0] ac_rresp; wire ac_rlast;
 
+    wire [7:0]  ac_dbg_engine;
+    wire [15:0] ac_dbg_layer;
+    wire        ac_dbg_busy;
+
     Accelerator_Top #(.ARRAY_SIZE(ARRAY_SIZE)) u_accel (
         .s_axi_aclk(clk_sys), .s_axi_aresetn(rst_n),
+        .dbg_engine(ac_dbg_engine), .dbg_layer(ac_dbg_layer),
+        .dbg_busy(ac_dbg_busy),
+        .dbg_ce_src(ac_dbg_ce_src), .dbg_ce_dst(ac_dbg_ce_dst),
+        .dbg_desc_sel(dbg_desc_sel), .dbg_desc_val(ac_dbg_desc_val),
+        .dbg_conv0(ac_dbg_conv0), .dbg_conv1(ac_dbg_conv1),
+        .dbg_elem(ac_dbg_elem), .dbg_arb(ac_dbg_arb),
 
         .m_axi_awvalid(ac_awvalid), .m_axi_awid(ac_awid),
         .m_axi_awlen(ac_awlen), .m_axi_awsize(ac_awsize),
@@ -386,6 +427,8 @@ module dvcon_top #(
 
         // The JTAG read window: how the box list gets back to the host.
         .m2_address(jt_mem_address), .m2_read(jt_mem_read),
+        .m2_write(jt_mem_write), .m2_writedata(jt_mem_writedata),
+        .m2_byteenable(jt_mem_byteenable),
         .m2_readdata(jt_mem_readdata),
         .m2_readdatavalid(jt_mem_readdatavalid),
         .m2_waitrequest(jt_mem_waitrequest),
@@ -400,6 +443,7 @@ module dvcon_top #(
         .DATA_W(32), .MAX_BURST(64)
     ) u_sdram (
         .clk(clk_sys), .rst_n(rst_n),
+        .cap_sel(sdram_cap_sel),
         .avs_address(arb_address[26:2]), .avs_read(arb_read),
         .avs_write(arb_write), .avs_writedata(arb_writedata),
         .avs_byteenable(arb_byteenable), .avs_burstcount(arb_burstcount),
@@ -455,16 +499,134 @@ module dvcon_top #(
     //
     // These also stop the fitter from stripping the whole design: with nothing
     // driving the register block and nothing consuming the memory port, every
-    // engine is unobservable and synthesis is entitled to delete it. Pulling
-    // the accelerator's bus activity out to pins keeps it in the netlist, which
-    // is what makes the resource and timing numbers mean anything.
+    // engine is unobservable and synthesis is entitled to delete it.
+    //
+    // That is no longer what holds the netlist up, so these no longer have to
+    // be raw bus taps. jtag_ctrl drives dvcon_regs into the accelerator's slave
+    // port, and the accelerator's master port runs through the arbiter and
+    // sdram_ctrl to real SDRAM pins -- every signal the old taps exposed now
+    // has a genuine consumer. Check the logic-element count after changing
+    // this: a collapse means something did become unobservable.
+    //
+    // The raw taps were unreadable as a status display. avm_byteenable is
+    // combinational off wr_strb and is NOT gated by avm_write, so at idle it
+    // sat at 4'hF and four LEDs were lit for no reason -- with rst_n that made
+    // "five lights on" the healthy state, which looks exactly like a fault.
+    //
+    // Bus activity is nanoseconds wide and invisible on an LED, so each event
+    // is stretched to about 1/12 s. What you should see:
+    //
+    //   LEDG0  heartbeat, ~1.5 Hz. Solid or dark = clock or reset is dead.
+    //   LEDG1  accelerator fetching or writing memory -- IT IS RUNNING
+    //   LEDG2  SDRAM traffic (either master)
+    //   LEDG3  Ethernet frame received
+    //   LEDG4  Ethernet frame transmitting
+    //   LEDG5  Ethernet receive error (bad FCS)
+    //   LEDG6  JTAG register access
+    //   LEDG7  JTAG memory-window read
+    //   LEDG8  rst_n -- steady on in normal operation
+    //
+    //   LEDR   idle: dark except LEDR0 (rst_n).
+    //          running: a sweep across LEDR17..LEDR1, so "busy" is obvious
+    //          from across the room and distinguishable from a hung design,
+    //          which freezes the sweep while the heartbeat keeps going.
     // =========================================================================
-    assign LEDR = {avm_burstcount[3:0],
-                   avm_byteenable,
-                   avm_write, avm_read,
-                   ac_awvalid, ac_arvalid, ac_rvalid, ac_wvalid,
-                   mac_out_err, mac_out_eof,
-                   tx_busy, rst_n};
-    assign LEDG = {regs_waitrequest, regs_readdata[3:0], stat_good[3:0]};
+
+    // ~1.5 Hz at 50 MHz: bit 24 toggles every 2**24 cycles (0.336 s).
+    reg [24:0] hb_cnt;
+    always @(posedge clk_sys or negedge rst_n) begin
+        if (!rst_n) hb_cnt <= 25'd0;
+        else        hb_cnt <= hb_cnt + 25'd1;
+    end
+    wire heartbeat = hb_cnt[24];
+
+    wire accel_act = ac_awvalid | ac_arvalid | ac_rvalid | ac_wvalid;
+    wire mem_act   = avm_read | avm_write | arb_read | arb_write;
+    wire jtag_act  = jt_read | jt_write;
+
+    // One stretcher per indicator: an event reloads the counter, which then
+    // runs down. 2**22 cycles is 84 ms -- long enough to see, short enough
+    // that a burst of activity still reads as flicker rather than solid.
+    localparam integer STRETCH_W = 22;
+
+    reg [STRETCH_W-1:0] str_accel, str_mem, str_rx, str_tx, str_err,
+                        str_jtag, str_jmem;
+
+    // verilator lint_off WIDTH
+    `define STRETCH(reg_name, event_sig)                                   \
+        always @(posedge clk_sys or negedge rst_n) begin                   \
+            if (!rst_n)            reg_name <= '0;                         \
+            else if (event_sig)    reg_name <= {STRETCH_W{1'b1}};          \
+            else if (|reg_name)    reg_name <= reg_name - 1'b1;            \
+        end
+
+    `STRETCH(str_accel, accel_act)
+    `STRETCH(str_mem,   mem_act)
+    `STRETCH(str_rx,    mac_out_eof)
+    `STRETCH(str_tx,    tx_busy)
+    `STRETCH(str_err,   mac_out_err)
+    `STRETCH(str_jtag,  jtag_act)
+    `STRETCH(str_jmem,  jt_mem_read)
+    `undef STRETCH
+    // verilator lint_on WIDTH
+
+    wire running = ac_dbg_busy | |str_accel;
+
+    // =========================================================================
+    // LEDR: what the accelerator is doing, and how far through it is
+    //
+    // LEDR0..7 are the engines, one bit each, straight from Accelerator_Top's
+    // dbg_engine tap. Engine activity is bursty at 50 MHz -- a conv tile is
+    // microseconds -- so each is stretched to ~84 ms or the LED never appears
+    // to leave its idle state.
+    //
+    // LEDR8..17 are a ten-segment progress bar over the descriptor list. The
+    // network is 181 descriptors, so each segment is ~18 layers. This is the
+    // single most useful thing on the board: a run that wedges freezes the bar
+    // at the layer it died on, which is exactly the number you need, and it
+    // reads from across the room without a JTAG poll.
+    // =========================================================================
+    localparam integer N_DESC = 181;
+
+    reg [STRETCH_W-1:0] str_eng [0:7];
+    genvar gi;
+    generate
+        for (gi = 0; gi < 8; gi = gi + 1) begin : g_eng
+            always @(posedge clk_sys or negedge rst_n) begin
+                if (!rst_n)                    str_eng[gi] <= '0;
+                else if (ac_dbg_engine[gi])    str_eng[gi] <= {STRETCH_W{1'b1}};
+                else if (|str_eng[gi])         str_eng[gi] <= str_eng[gi] - 1'b1;
+            end
+        end
+    endgenerate
+
+    wire [7:0] eng_led = {|str_eng[7], |str_eng[6], |str_eng[5], |str_eng[4],
+                          |str_eng[3], |str_eng[2], |str_eng[1], |str_eng[0]};
+
+    // Thermometer bar: segment k lights once the run has passed k/10 of the
+    // descriptor list. Multiply rather than divide -- there is no divider here
+    // and a compare against a scaled constant is the same answer.
+    wire [9:0] prog_bar;
+    generate
+        for (gi = 0; gi < 10; gi = gi + 1) begin : g_bar
+            assign prog_bar[gi] =
+                (ac_dbg_layer * 10) >= (N_DESC * (gi + 1)) ? 1'b1 : 1'b0;
+        end
+    endgenerate
+
+    assign LEDR = {prog_bar, eng_led};
+
+    // =========================================================================
+    // LEDG: the host-facing view -- link, transfers, and whether it is alive
+    // =========================================================================
+    assign LEDG = {rst_n,          // 8  powered and out of reset
+                   ac_dbg_busy,    // 7  INFERENCE RUNNING
+                   |str_jmem,      // 6  FILE TRANSFER (JTAG memory window)
+                   |str_jtag,      // 5  JTAG register access
+                   |str_err,       // 4  Ethernet receive error
+                   |str_tx,        // 3  Ethernet transmitting
+                   |str_rx,        // 2  Ethernet frame received
+                   |str_mem,       // 1  SDRAM traffic
+                   heartbeat};     // 0  ~1.5 Hz: clock and reset are alive
 
 endmodule

@@ -76,7 +76,11 @@ module eth_cmd_engine #(
     // ---- status, for the LEDs and for JTAG to read ----
     output reg  [31:0] stat_frames,
     output reg  [31:0] stat_bytes,
-    output reg  [63:0] rx_bitmap
+    output reg  [63:0] rx_bitmap,
+    // Words the write queue could not accept. MUST be 0 after a load; any
+    // other value means the model in SDRAM has holes in it. See the queue
+    // below for why this counter exists at all.
+    output reg  [31:0] stat_wdrop
 );
 
     // Header byte offsets, counted from the FIRST byte the MAC emits.
@@ -136,6 +140,49 @@ module eth_cmd_engine #(
 
     reg [3:0]  ack_i;
 
+    // =========================================================================
+    // Write queue
+    // =========================================================================
+    // The receive side cannot be stalled. Bytes arrive from the PHY on their
+    // own clock and there is no backpressure to apply, so a packed word has to
+    // go SOMEWHERE the moment it is complete.
+    //
+    // This engine used to drive avm_address/avm_writedata/avm_write directly
+    // from the packer. When the SDRAM was busy -- an accelerator burst holding
+    // the arbiter, or, far more often, a refresh -- waitrequest stayed high and
+    // the previous write was still pending, so the next completed word simply
+    // OVERWROTE it. The pending word was never committed and wr_ptr had already
+    // advanced past its address, leaving a four-byte hole in memory with no
+    // error reported anywhere.
+    //
+    // Nothing catches that downstream. The frame's FCS was good, so its bit is
+    // set in rx_bitmap and the host never retransmits it; stat_bytes counts
+    // bytes received, not words committed. The result is a model blob in SDRAM
+    // that is intact except for scattered stale words -- which is why loading
+    // over JTAG (one word at a time, each one waited on) worked while loading
+    // the same file over Ethernet did not.
+    //
+    // A queue decouples the two rates. At 100 Mbit the packer completes a word
+    // roughly every 32 clk cycles; a single-beat SDRAM write costs ~15 and a
+    // refresh ~10 more, so 16 entries is far deeper than any real stall. It is
+    // still a bounded queue, so stat_wdrop counts what it could not take rather
+    // than letting the failure go silent a second time.
+    localparam integer WQ_AW = 4;                 // 16 entries
+    localparam integer WQ_N  = 1 << WQ_AW;
+
+    // {address[31:0], data[31:0], byteenable[3:0]}
+    reg [67:0]     wq [0:WQ_N-1];
+    reg [WQ_AW:0]  wq_wp, wq_rp;                  // one extra bit: full vs empty
+
+    wire wq_empty = (wq_wp == wq_rp);
+    wire wq_full  = (wq_wp[WQ_AW-1:0] == wq_rp[WQ_AW-1:0]) &&
+                    (wq_wp[WQ_AW]     != wq_rp[WQ_AW]);
+
+    // The head can be loaded onto the bus when nothing is in flight, or when
+    // the beat in flight is being accepted this very cycle.
+    wire wq_pop = !wq_empty && (!avm_write || !avm_waitrequest);
+    wire [67:0] wq_head = wq[wq_rp[WQ_AW-1:0]];
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state       <= S_IDLE;
@@ -161,10 +208,26 @@ module eth_cmd_engine #(
             tx_last     <= 1'b0;
             stat_frames <= 32'h0;
             stat_bytes  <= 32'h0;
+            stat_wdrop  <= 32'h0;
             rx_bitmap   <= 64'h0;
+            wq_wp       <= '0;
+            wq_rp       <= '0;
         end else begin
-            // An accepted write is one cycle wide; waitrequest extends it.
+            // ---- Avalon write issue, driven only from the queue -------------
+            // Retire an accepted beat, then load the next one. Order matters:
+            // the load below overrides this deassertion in the same cycle, so a
+            // full queue issues back-to-back beats with no idle cycle between.
             if (avm_write && !avm_waitrequest) avm_write <= 1'b0;
+
+            if (wq_pop) begin
+                avm_address    <= wq_head[67:36];
+                avm_writedata  <= wq_head[35:4];
+                avm_byteenable <= wq_head[3:0];
+                avm_burstcount <= 7'd1;
+                avm_write      <= 1'b1;
+                wq_rp          <= wq_rp + 1'b1;
+            end
+
             if (tx_valid && tx_ready) begin
                 tx_valid <= 1'b0;
                 tx_last  <= 1'b0;
@@ -258,11 +321,15 @@ module eth_cmd_engine #(
                         pay_left <= pay_left - 1'b1;
 
                         if (pack_n == 2'd3) begin
-                            avm_address   <= wr_ptr;
-                            avm_writedata <= {rx_data, pack[23:0]};
-                            avm_byteenable<= 4'hF;
-                            avm_burstcount<= 7'd1;
-                            avm_write     <= 1'b1;
+                            // Into the queue, never straight onto the bus --
+                            // the bus may still be retiring the previous word.
+                            if (!wq_full) begin
+                                wq[wq_wp[WQ_AW-1:0]] <=
+                                    {wr_ptr, {rx_data, pack[23:0]}, 4'hF};
+                                wq_wp <= wq_wp + 1'b1;
+                            end else begin
+                                stat_wdrop <= stat_wdrop + 1'b1;
+                            end
                             wr_ptr        <= wr_ptr + 32'd4;
                             pack_n        <= 2'd0;
                         end else begin
@@ -292,12 +359,14 @@ module eth_cmd_engine #(
             // directly rather than having to merge an arriving byte.
             if (rx_eof) begin
                 if (state == S_PAY && pack_n != 2'd0) begin
-                    avm_address    <= wr_ptr;
-                    avm_writedata  <= pack;
-                    avm_byteenable <= (pack_n == 2'd1) ? 4'h1 :
-                                      (pack_n == 2'd2) ? 4'h3 : 4'h7;
-                    avm_burstcount <= 7'd1;
-                    avm_write      <= 1'b1;
+                    if (!wq_full) begin
+                        wq[wq_wp[WQ_AW-1:0]] <=
+                            {wr_ptr, pack, (pack_n == 2'd1) ? 4'h1 :
+                                           (pack_n == 2'd2) ? 4'h3 : 4'h7};
+                        wq_wp <= wq_wp + 1'b1;
+                    end else begin
+                        stat_wdrop <= stat_wdrop + 1'b1;
+                    end
                 end
 
                 if (state == S_PAY) begin

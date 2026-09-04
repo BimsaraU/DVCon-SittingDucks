@@ -16,6 +16,7 @@ and this script is the only place the values exist.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -56,25 +57,47 @@ OPCODES = [
     ("ACK",       0x10, "FPGA -> host: the bitmap"),
 ]
 
-# Register offsets, as dvcon_regs implements them (word indices).
+# Register offsets as WORD indices. Avalon is word addressed, so these are the
+# byte offsets in dvcon_regs.sv's header divided by four -- getting that wrong
+# aliases the whole map to four times its size.
+#
+# 0x00..0x0C are the accelerator's own registers, forwarded by dvcon_regs.
+# 0x33..0x3F are answered inside jtag_ctrl from wires and never reach the
+# accelerator; check_registers() below verifies those against the RTL, because
+# IDENT was wrong here for a while (0x0F instead of 0x0C) and a host built
+# against it reads a register that is not IDENT at all.
 REGISTERS = [
-    ("CTRL",        0x00, "bit0 START, bit1 soft reset, bit2 ucode mode"),
-    ("STATUS",      0x01, "bit0 busy, bit1 done, bit2 error"),
+    ("CTRL",        0x00, "bit0 START (self-clearing), bit1 MODE 0=GEMM 1=YOLO, "
+                          "bit2 ENGINE 0=sequencer 1=microcode"),
+    ("STATUS",      0x01, "[0]busy [1]done [2]error [7:4]fsm, read-only"),
+    ("SRC_ADDR",    0x02, "GEMM activations"),
+    ("DST_ADDR",    0x03, "GEMM results"),
+    ("IMG_DIM",     0x04, "{K, ARRAY_SIZE}"),
+    ("WEIGHT_ADDR", 0x05, "weight blob base"),
     ("DESC_ADDR",   0x06, "descriptor table base"),
     ("IMG_ADDR",    0x07, "input frame base"),
     ("BOX_ADDR",    0x08, "box list base"),
     ("CONF_THRESH", 0x09, "INT8 confidence threshold"),
-    ("NUM_BOXES",   0x0A, "boxes written by the last frame"),
-    ("IDENT",       0x0F, "0xDC, ARRAY_SIZE, build id"),
-    # Answered inside jtag_ctrl from wires, not by the accelerator's register
-    # block. Read-only, and the first thing to check during bring-up.
+    ("NUM_BOXES",   0x0A, "boxes written by the last frame, read-only"),
+    ("LAYER_IDX",   0x0B, "which descriptor is executing, read-only"),
+    ("IDENT",       0x0C, "{8'hDC, ARRAY_SIZE, build id}, read-only"),
+
+    # Answered inside jtag_ctrl from wires. Read-only unless noted.
+    ("SD_TAP",      0x33, "SDRAM read capture tap 0..3 (write)"),
+    ("DBG_DSEL",    0x34, "which descriptor word to read back (write)"),
+    ("DBG_DVAL",    0x35, "desc[DSEL] as the sequencer latched it"),
+    ("ETH_DROP",    0x36, "words the ethernet write queue could not accept"),
+    ("DBG_SRC",     0x37, "conv src address the sequencer decoded"),
+    ("DBG_DST",     0x38, "conv dst address the sequencer decoded"),
+    ("ETH_FILT",    0x39, "good FCS but addressed to someone else"),
     ("ETH_GOOD",    0x3A, "ethernet frames with a good FCS"),
     ("ETH_BAD",     0x3B, "ethernet frames that failed FCS"),
     ("ETH_CMD",     0x3C, "command frames accepted"),
     ("ETH_BITMAP",  0x3D, "low 32 bits of the ACK window bitmap"),
-    ("MEMADDR",     0x3E, "SDRAM read cursor (write)"),
-    ("MEMDATA",     0x3F, "word at the cursor; post-increments (read)"),
+    ("MEMADDR",     0x3E, "SDRAM cursor (write)"),
+    ("MEMDATA",     0x3F, "word at the cursor; post-increments (read and write)"),
 ]
+
 
 
 def c_header():
@@ -144,6 +167,49 @@ def sv_header():
     return "\n".join(L) + "\n"
 
 
+def check_registers():
+    """Verify the register offsets against the RTL that implements them.
+
+    IDENT sat here as 0x0F for a while when dvcon_regs answers it at byte 0x30,
+    i.e. word 0x0C. Nothing caught it: the generated header was internally
+    consistent, the JTAG script had its own copy of the number, and the Tcl
+    self-check stubbed whatever the script asked for -- so the check passed
+    while a real read went to the wrong register. Numbers duplicated across
+    files need a check that reads BOTH, not one that reads the copy.
+    """
+    problems = []
+    want = dict((n, o) for n, o, _ in REGISTERS)
+
+    # jtag_ctrl's localparams: REG_<NAME> = 6'h<offset>
+    jc = (QRTS / "rtl" / "platform" / "jtag_ctrl.sv").read_text(encoding="utf-8")
+    alias = {"ETH_BM": "ETH_BITMAP", "DBG_DVAL": "DBG_DVAL"}
+    for m in re.finditer(r"REG_(\w+)\s*=\s*6'h([0-9A-Fa-f]{2})", jc):
+        name = alias.get(m.group(1), m.group(1))
+        off = int(m.group(2), 16)
+        if name not in want:
+            problems.append(f"jtag_ctrl has REG_{m.group(1)} = 0x{off:02X}, "
+                            f"missing from this table")
+        elif want[name] != off:
+            problems.append(f"{name}: this table says 0x{want[name]:02X}, "
+                            f"jtag_ctrl.sv says 0x{off:02X}")
+
+    # dvcon_regs answers IDENT at a byte offset; Avalon is word addressed.
+    dr = (QRTS / "rtl" / "platform" / "dvcon_regs.sv").read_text(encoding="utf-8")
+    m = re.search(r"byte_off\s*==\s*8'h([0-9A-Fa-f]{2})", dr)
+    if m:
+        ident_word = int(m.group(1), 16) // 4
+        if want.get("IDENT") != ident_word:
+            problems.append(
+                f"IDENT: this table says 0x{want.get('IDENT'):02X}, but "
+                f"dvcon_regs answers it at byte 0x{m.group(1)} = word "
+                f"0x{ident_word:02X}")
+
+    if problems:
+        for p in problems:
+            print(f"  register mismatch: {p}")
+        sys.exit("  register table disagrees with the RTL")
+
+
 def overlap_check():
     """A map whose regions overlap is the bug this file exists to prevent."""
     spans = sorted((b, b + s, n) for n, b, s, _ in REGIONS)
@@ -164,6 +230,7 @@ def main():
     args = ap.parse_args()
 
     overlap_check()
+    check_registers()
 
     targets = {
         QRTS / "sw" / "dvcon_memmap.h": c_header(),

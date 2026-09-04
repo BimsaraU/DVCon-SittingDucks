@@ -69,6 +69,12 @@ module yolo_conv_engine #(
     input  wire [15:0] act_scale,
 
     output reg         busy,
+    // Debug taps. The descriptor fetch is fixed and the walk now reaches layer
+    // 6 and stalls inside CONV_W, which from outside is indistinguishable
+    // between "the engine is waiting on memory" and "the engine's own loop is
+    // not advancing". These two words tell those apart from the host.
+    output wire [31:0] dbg_conv0,   // {beat_cnt, 3'b0, state}
+    output wire [31:0] dbg_conv1,   // {oc_tile, ic_tile}
     output reg         done,
     output reg         error,
     // 5 bits: the encoding outgrew a nibble when the requantize was split
@@ -320,6 +326,9 @@ module yolo_conv_engine #(
     // divider after the burst has already finished, so the pulse is latched
     // rather than tested directly -- testing it directly loses it and hangs.
     reg         wload_rd_done, wload_rd_err;
+    // One read may be outstanding at a time. See the note on the C_WLOAD /
+    // C_BLOAD request guards below.
+    reg         rd_inflight;
 
     // oy*g_s - g_p and ox*g_s - g_p depend only on the OUTPUT POSITION, which
     // advances in C_NEXT -- and C_NEXT is always followed by C_WLOAD, a
@@ -482,6 +491,11 @@ module yolo_conv_engine #(
     reg [7:0]  cfg_step;
     reg        run_armed;   // sys_done seen low since this run's START
 
+    // Placed after beat_cnt's declaration, not next to `state`: these are read
+    // by the host over JTAG to tell a memory stall apart from a stalled loop.
+    assign dbg_conv0 = {beat_cnt, 3'b000, state};
+    assign dbg_conv1 = {oc_tile, ic_tile};
+
     // Destination byte address of the lane currently being stored. Broken out
     // because C_STORE needs it three times (address, data lane, strobe lane)
     // and recomputing it inline invites the three from drifting apart.
@@ -522,10 +536,32 @@ module yolo_conv_engine #(
     // shift, reached through a 16-way mux on acc_buf and written back through
     // another -- the worst path in the design once the softmax divide was
     // fixed, at -4.9 ns.
+    //
+    // WIDEN BEFORE MULTIPLYING.
+    //
+    // This was `rq_mul = (a + b) * $signed({1'b0, g_rq_mult});`, relying on the
+    // 64-bit assignment context to size the multiply. It does not survive
+    // synthesis/simulation reliably: the product was evaluated at 32 bits and
+    // wrapped, so any layer whose (acc + bias) is large enough that the Q0.16
+    // multiply needs more than 32 bits produced a result of the WRONG SIGN --
+    // and then saturated to the opposite rail.
+    //
+    // Measured in tb_top_sequencer: acc = -10,449 with bias = -583,437,254
+    // gives s0 = -583,447,703. s0 * 8192 = -4.779e12, which needs 43 bits.
+    // Truncated to 32 it becomes +895,938,560; >>> 22 is +213, clamped to
+    // +127, where the correct answer is -128. Two of eight output channels in
+    // that bench were wrong -- exactly the ones whose random bias was large.
+    //
+    // Both operands are now explicitly 64-bit signed, so the multiply is
+    // 64-bit by construction rather than by context.
     function automatic signed [63:0] rq_mul(input signed [ACC_WIDTH-1:0] a,
                                             input signed [ACC_WIDTH-1:0] b);
+        reg signed [63:0] s0, mult;
         begin
-            rq_mul = (a + b) * $signed({1'b0, g_rq_mult});
+            s0   = $signed(a);          // sign-extends to 64
+            s0   = s0 + $signed(b);
+            mult = $signed({48'd0, g_rq_mult});   // unsigned Q0.16, so positive
+            rq_mul = s0 * mult;
         end
     endfunction
 
@@ -568,9 +604,10 @@ module yolo_conv_engine #(
             silu_issue <= 16'd0; silu_recv <= 16'd0;
             run_armed <= 1'b0;
             sd_busy   <= 1'b0; sd_phase <= 2'd3;
-            wload_rd_done <= 1'b0; wload_rd_err <= 1'b0;
+            wload_rd_done <= 1'b0; wload_rd_err <= 1'b0; rd_inflight <= 1'b0;
         end else begin
             rd_start  <= 1'b0;
+            if (rd_done) rd_inflight <= 1'b0;
             wr_start  <= 1'b0;
             fsm_state <= state;
 
@@ -659,10 +696,14 @@ module yolo_conv_engine #(
             // Weight tiles are emitted in exactly the loop order used here, so
             // the tile for (oc_tile, ic_tile) is at a flat sequential offset.
             C_WLOAD: begin
-                if (beat_cnt == 16'd0 && !rd_start) begin
+                // !rd_inflight, NOT !rd_start: rd_start is a one-cycle
+                // pulse, so gating on it re-fires this request every cycle
+                // until the first beat arrives.
+                if (beat_cnt == 16'd0 && !rd_inflight) begin
                     rd_addr  <= {32'h0, g_wgt + (wtile_idx * WTILE_BYTES)};
                     rd_len   <= WTILE_BEATS[7:0];
                     rd_start <= 1'b1;
+                    rd_inflight <= 1'b1;
                 end
                 if (rd_data_valid) begin
                     weight_buf[beat_cnt*8+0] <= rd_data[7:0];
@@ -718,12 +759,13 @@ module yolo_conv_engine #(
             // ------------------------------------------------------------
             // Bias is per output channel, INT32, loaded once per oc_tile.
             C_BLOAD: begin
-                if (beat_cnt == 16'd0 && !rd_start) begin
+                if (beat_cnt == 16'd0 && !rd_inflight) begin
                     // Depthwise: oc_tile is a channel, so the ARRAY_SIZE-entry
                     // bias block it lives in starts at wgt_oc_tile.
                     rd_addr  <= {32'h0, g_bias + wgt_oc_tile*ARRAY_SIZE*4};
                     rd_len   <= (ARRAY_SIZE/2);
                     rd_start <= 1'b1;
+                    rd_inflight <= 1'b1;
                 end
                 if (rd_data_valid) begin
                     bias_buf[beat_cnt*2+0] <= rd_data[31:0];
@@ -879,6 +921,7 @@ module yolo_conv_engine #(
                     rd_addr  <= {32'h0, g_src + src_off};
                     rd_len   <= 8'd1;
                     rd_start <= 1'b1;
+                    rd_inflight <= 1'b1;
                     state    <= C_ACT_W;
                 end
             end
@@ -1057,7 +1100,12 @@ module yolo_conv_engine #(
             // wr_data used to sit in lane 0 with an all-ones strobe upstream,
             // so every store wrote 8 bytes and zeroed the 7 that followed it.
             C_STORE: begin
-                wr_addr  <= {32'h0, st_byte_addr};
+                // 8-byte ALIGNED. wr_data and wr_strb below already place the
+                // byte in lane st_byte_addr[2:0] of the 64-bit beat; carrying
+                // those same bits in the address applies the offset a second
+                // time downstream and scatters the store. Same defect as
+                // yolo_elem_engine's E_WR.
+                wr_addr  <= {32'h0, st_byte_addr & 32'hFFFF_FFF8};
                 wr_data  <= {56'h0, acc_buf[beat_cnt][7:0]} << {st_byte_addr[2:0], 3'b000};
                 wr_strb  <= 8'h01 << st_byte_addr[2:0];
                 wr_len   <= 8'd1;
