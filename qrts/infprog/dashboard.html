@@ -3,271 +3,276 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DVCon Accelerator Diagnostics</title>
+<title>DVCon NPU</title>
 <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
+<div class="app">
 
-<header>
+<!-- ============================== sidebar ============================== -->
+<aside class="side">
   <div class="brand">
+    <div class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div><b>DVCon NPU</b><span>YOLO26n on DE2-115</span></div>
+  </div>
+
+  <nav>
+    <p class="group">Overview</p>
+    <button class="nav active" data-view="v-dash"><svg viewBox="0 0 20 20"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"/></svg>Dashboard</button>
+    <button class="nav" data-view="v-xfer"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></svg>Transfer</button>
+    <button class="nav" data-view="v-run"><svg viewBox="0 0 20 20"><path d="M6 4l10 6-10 6z"/></svg>Inference</button>
+
+    <p class="group">Diagnostics</p>
+    <button class="nav" data-view="v-board"><svg viewBox="0 0 20 20"><circle cx="5" cy="10" r="2"/><circle cx="10" cy="10" r="2"/><circle cx="15" cy="10" r="2"/></svg>Board and LEDs</button>
+    <button class="nav" data-view="v-mem"><svg viewBox="0 0 20 20"><path d="M4 5h12v10H4zM7 5V3M10 5V3M13 5V3M7 17v-2M10 17v-2M13 17v-2"/></svg>Memory</button>
+    <button class="nav" data-view="v-eth"><svg viewBox="0 0 20 20"><path d="M3 10h14M10 3v14M5 5l10 10M15 5L5 15"/></svg>Ethernet</button>
+  </nav>
+
+  <div class="boardchip" id="boardchip">
     <span class="dot" id="cable-dot"></span>
-    <h1>DE2-115 Accelerator</h1>
+    <div><b id="chip-title">Board not checked</b><span id="chip-sub">Run the health checks</span></div>
   </div>
-  <div class="ident" id="ident-strip">
-    <span class="muted">not yet queried</span>
-  </div>
+</aside>
+
+<!-- ============================== main ============================== -->
+<main>
+<header class="top">
+  <h1 id="view-title">Dashboard</h1>
+  <span class="pill" id="state-pill"><span class="dot"></span><span id="state-text">Idle</span></span>
+  <div class="spacer"></div>
+  <button class="ghost" id="btn-program-top" title="Load quartus/output_files/dvcon.sof over the USB-Blaster">Program FPGA</button>
+  <button class="ghost" id="btn-refresh" title="Read STATUS and the counters over JTAG">Read board state</button>
+  <button class="primary" id="btn-quickrun">Run inference</button>
 </header>
 
-<nav class="tabs" role="tablist">
-  <button class="tab active" data-panel="p-health" role="tab">Health</button>
-  <button class="tab" data-panel="p-transfer" role="tab">Transfer</button>
-  <button class="tab" data-panel="p-run" role="tab">Inference</button>
-  <button class="tab" data-panel="p-mem" role="tab">Memory</button>
-  <button class="tab" data-panel="p-eth" role="tab">Ethernet</button>
-  <button class="tab" data-panel="p-leds" role="tab">Board LEDs</button>
-</nav>
-
-<main>
-
-<!-- ================= HEALTH ================= -->
-<section id="p-health" class="panel active">
-  <div class="grid">
-    <div class="card">
-      <h2>Bring-up order</h2>
-      <p class="lede">Each step depends on the one above it. A failure here
-        makes every later result meaningless, so work top-down.</p>
-      <ol class="steps" id="steps">
-        <li data-step="cable"><span class="pill">1</span> USB-Blaster present
-          <button class="go" data-act="cable">check</button>
-          <div class="out"></div></li>
-        <li data-step="ident"><span class="pill">2</span> Bitstream identity
-          <button class="go" data-act="ident">check</button>
-          <div class="out"></div></li>
-        <li data-step="memtest"><span class="pill">3</span> SDRAM write/read
-          <button class="go" data-act="memtest">check</button>
-          <div class="out"></div></li>
-        <li data-step="regs"><span class="pill">4</span> Control registers
-          <button class="go" data-act="regs">check</button>
-          <div class="out"></div></li>
-      </ol>
-      <button class="primary" id="run-all-checks">Run all checks</button>
-    </div>
-
-    <div class="card">
-      <h2>Registers</h2>
-      <table class="kv" id="reg-table">
-        <tbody><tr><td colspan="2" class="muted">not read yet</td></tr></tbody>
-      </table>
-      <div id="status-bits" class="bits"></div>
-    </div>
-  </div>
-</section>
-
-<!-- ================= TRANSFER ================= -->
-<section id="p-transfer" class="panel">
-  <div class="card">
-    <h2>Load an image</h2>
-    <p class="lede">Pick any photo. It is letterboxed to 640&times;640 (aspect
-      preserved, grey 114 padding, the same as ultralytics), quantised to INT8
-      CHW, and becomes the frame the accelerator reads. A matching RGB888 copy
-      is kept alongside it so detections are drawn on the picture rather than on
-      the quantised tensor.</p>
-
-    <div class="row">
-      <input type="file" id="img-file" accept="image/*">
-      <button class="primary" id="btn-img">Prepare frame</button>
-    </div>
-    <p class="hint">JPEG, PNG, BMP, GIF, WEBP. Conversion happens on this PC.</p>
-
-    <div id="img-result" class="result" hidden></div>
-    <div id="img-preview-wrap" hidden>
-      <img id="img-preview" alt="letterboxed 640x640 frame as the board sees it">
-      <p class="hint">This is exactly what is written to SDRAM, letterbox bars
-        and all.</p>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Model &amp; frame transfer</h2>
-    <p class="lede">Streams a file into SDRAM. JTAG manages about 4,900
-      words/s — roughly two minutes for the 2.46&nbsp;MB model — and needs
-      nothing but the USB-Blaster. Ethernet does the same in seconds once the
-      link is in MII; check the Ethernet panel before choosing it.</p>
-
-    <div class="field">
-      <label for="transport">Transport</label>
-      <div class="row">
-        <label class="check"><input type="radio" name="transport" value="jtag" checked>
-          JTAG — slow, always works</label>
-        <label class="check"><input type="radio" name="transport" value="eth">
-          Ethernet — fast, needs the PHY in MII</label>
+<!-- ------------------------------ dashboard ------------------------------ -->
+<section class="view active" id="v-dash">
+  <div class="grid-dash">
+    <article class="card big">
+      <div class="card-head">
+        <h2>Detections</h2>
+        <span class="pill soft" id="det-pill"><span class="dot"></span><span id="det-pill-text">No frame yet</span></span>
+        <div class="spacer"></div>
+        <button class="ghost sm" id="btn-draw">Draw board result</button>
+        <button class="ghost sm" id="btn-sim-dash">Simulate on this PC</button>
+        <button class="ghost sm" id="btn-float-dash">Original model (FP32)</button>
       </div>
-    </div>
-    <div class="field" id="eth-opts" hidden>
-      <label for="eth-iface">Interface (substring match)</label>
-      <input id="eth-iface" value="Realtek" spellcheck="false">
-      <span class="hint">There is no flow control in this protocol — the FPGA
-        drops what it cannot absorb. Start with gap 0; if verify reports
-        dropped words, raise it.</span>
-      <div class="row">
-        <div class="field inline">
-          <label for="eth-gap">Inter-frame gap (µs)</label>
-          <input id="eth-gap" value="0" spellcheck="false">
+      <p class="meta" id="det-meta">Load an image on the Transfer page, send it, then run.</p>
+      <div class="stage" id="stage">
+        <img id="stage-img" alt="frame with detections drawn on it" hidden>
+        <div class="empty" id="stage-empty">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4"/></svg>
+          <p>No detections to show yet</p>
         </div>
+        <div class="legend" id="legend" hidden></div>
       </div>
+    </article>
+
+    <div class="col">
+      <article class="card">
+        <div class="card-head"><h2>Last run</h2><div class="spacer"></div><span class="muted sm" id="run-when">not run</span></div>
+        <p class="meta" id="run-sub">Time measured by the NPU's own cycle counter at 50 MHz.</p>
+        <div class="metric"><span id="m-ms">--</span><small>ms</small>
+          <span class="delta" id="m-boxes">0 boxes</span></div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>Systolic array utilisation</h2></div>
+        <div class="metric sm"><span id="m-util">--</span><small>%</small>
+          <span class="muted sm" id="m-dma">SDRAM traffic --</span></div>
+        <div class="segbar" id="segbar"></div>
+        <div class="segscale"><span>0%</span><span>100%</span></div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>Board health</h2><div class="spacer"></div>
+          <button class="link" data-goto="v-board">All checks</button></div>
+        <ul class="rows">
+          <li><span>Cable</span><b id="h-cable" class="muted">not checked</b></li>
+          <li><span>Bitstream</span><b id="h-ident" class="muted">not checked</b></li>
+          <li><span>SDRAM</span><b id="h-mem" class="muted">not checked</b></li>
+          <li><span>Model</span><b id="h-model" class="muted">none</b></li>
+        </ul>
+      </article>
     </div>
 
-    <div class="field">
-      <label for="model-path">Model blob</label>
-      <input id="model-path" spellcheck="false">
-      <span class="hint">must be exported for <b>ARRAY_SIZE 16</b>; the IDENT
-        register reports what the bitstream expects</span>
-    </div>
-    <div class="field">
-      <label for="model-base">Load address</label>
-      <input id="model-base" value="0x00000000" spellcheck="false">
-    </div>
-    <div class="row">
-      <label class="check"><input type="checkbox" id="model-verify" checked>
-        verify 64 sampled words against the file</label>
-      <button class="primary" data-load="model">Transfer model</button>
-    </div>
-
-    <hr>
-
-    <div class="field">
-      <label for="frame-path">Input frame</label>
-      <input id="frame-path" spellcheck="false">
-      <span class="hint">raw INT8 CHW bitmap, 640×640×3 = 1,228,800 bytes</span>
-    </div>
-    <div class="field">
-      <label for="frame-base">Load address</label>
-      <input id="frame-base" value="0x00400000" spellcheck="false">
-    </div>
-    <div class="row">
-      <label class="check"><input type="checkbox" id="frame-verify" checked>
-        verify</label>
-      <button class="primary" data-load="frame">Transfer frame</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Job</h2>
-    <div class="jobline"><span id="job-name" class="muted">idle</span>
-      <span id="job-spin" class="spin" hidden></span></div>
-    <pre id="job-log" class="log">no job has run yet</pre>
+    <article class="card wide">
+      <div class="card-head"><h2>Board LEDs</h2>
+        <span class="muted sm" id="led-src">Showing the last STATUS read. Press Read board state to update.</span>
+        <div class="spacer"></div>
+        <button class="link" data-goto="v-board">What each LED means</button></div>
+      <div class="board" id="board-mini"></div>
+    </article>
   </div>
 </section>
 
-<!-- ================= INFERENCE ================= -->
-<section id="p-run" class="panel">
-  <div class="card">
-    <h2>Run inference</h2>
-    <p class="lede">Sets the descriptor, image and box pointers, pulses START,
-      then polls STATUS to completion.</p>
-
-    <div class="field">
-      <label for="desc-base">Descriptor base</label>
-      <input id="desc-base" value="0x00000020" spellcheck="false">
-      <span class="hint">model base + 32. The blob starts with a 32-byte header
-        and the sequencer fetches from here immediately with no header skip —
-        pointing at the blob start executes the header as descriptor 0.</span>
-    </div>
-    <div class="field">
-      <label for="conf">Confidence threshold</label>
-      <input id="conf" value="0x20" spellcheck="false">
-    </div>
-    <button class="primary" id="btn-run">Start inference</button>
-
-    <div id="run-result" class="result" hidden></div>
-  </div>
-
-  <div class="card">
-    <h2>Detections</h2>
-    <div class="row">
-      <button class="go" id="btn-boxes">Read box list</button>
-      <button class="go" id="btn-render">Draw boxes on the frame</button>
-    </div>
-    <p class="lede">Drawing happens on this PC, not the FPGA — the board writes
-      a box list and nothing more.</p>
-    <div id="boxes-wrap">
-      <p class="muted">no boxes read yet</p>
-    </div>
-    <div id="render-wrap" hidden>
-      <img id="render-img" alt="input frame with detections drawn on it">
-      <p id="render-note" class="muted"></p>
-    </div>
-  </div>
-</section>
-
-<!-- ================= BOARD LEDs ================= -->
-<section id="p-leds" class="panel">
-  <div class="card">
-    <h2>What the board's LEDs mean</h2>
-    <p class="lede">Bus activity is nanoseconds wide, so every indicator is
-      stretched to about 1/12 s — otherwise nothing would ever appear to leave
-      its idle state. At rest you should see one blinking green (heartbeat) and
-      one steady green (reset released); everything else dark.</p>
-    <div id="led-guide"><p class="muted">loading…</p></div>
-  </div>
-</section>
-
-<!-- ================= MEMORY ================= -->
-<section id="p-mem" class="panel">
-  <div class="card">
-    <h2>Memory inspector</h2>
-    <p class="lede">Reads through the same JTAG window the loader writes
-      through, so it shows what the accelerator would actually fetch.</p>
-    <div class="row">
-      <div class="field inline">
-        <label for="mem-addr">Address</label>
-        <input id="mem-addr" value="0x00000000" spellcheck="false">
+<!-- ------------------------------ transfer ------------------------------ -->
+<section class="view" id="v-xfer">
+  <div class="grid-2">
+    <article class="card">
+      <div class="card-head"><h2>Image</h2></div>
+      <p class="meta">Any photo. It is letterboxed to 640 x 640 with grey bars, as
+        ultralytics does, and converted to the INT8 frame the NPU reads.</p>
+      <label class="drop" id="drop">
+        <input type="file" id="img-file" accept="image/*">
+        <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+        <b>Drop an image here or choose a file</b>
+        <span id="drop-name">JPEG, PNG, BMP, GIF, WEBP</span>
+      </label>
+      <img id="img-preview" class="preview" alt="letterboxed 640 x 640 frame" hidden>
+      <ul class="rows" id="img-rows" hidden></ul>
+      <div class="actions">
+        <button class="primary" id="btn-img">Prepare frame</button>
+        <button class="ghost" id="btn-img-send">Prepare and send frame</button>
       </div>
-      <div class="field inline">
-        <label for="mem-n">Words</label>
-        <input id="mem-n" value="16" spellcheck="false">
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Send to SDRAM</h2></div>
+      <div class="seg" role="radiogroup" aria-label="Transport">
+        <button class="on" data-tp="eth" role="radio" aria-checked="true">Ethernet</button>
+        <button data-tp="jtag" role="radio" aria-checked="false">JTAG</button>
       </div>
-      <button class="go" id="btn-memread">Read</button>
-    </div>
-    <div class="quickjump">
-      <span class="muted">jump:</span>
-      <button class="chip" data-addr="0x00000000">blob header</button>
-      <button class="chip" data-addr="0x00000020">descriptor 0</button>
-      <button class="chip" data-addr="0x00400000">frame</button>
-      <button class="chip" data-addr="0x00600000">boxes</button>
-      <button class="chip" data-addr="0x00800000">fmap arena</button>
-    </div>
-    <pre id="mem-out" class="log">nothing read yet</pre>
-    <div id="mem-decode" class="decode" hidden></div>
+      <p class="meta" id="tp-note">Ethernet moves the frame in about 0.1 s. It needs JP2 on
+        pins 2-3, the cable in J5 and the NIC at 100 Mbps.</p>
+      <div class="fields" id="eth-opts">
+        <label>Interface<input id="eth-iface" value="Realtek" spellcheck="false"></label>
+        <label>Gap between frames, us<input id="eth-gap" value="0" spellcheck="false"></label>
+      </div>
+      <label class="field">Model blob<input id="model-path" spellcheck="false"></label>
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="model-verify" checked> Verify</label>
+        <button class="ghost" data-load="model">Send model</button>
+      </div>
+      <label class="field">Frame<input id="frame-path" spellcheck="false"></label>
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="frame-verify" checked> Verify</label>
+        <button class="ghost" data-load="frame">Send frame</button>
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="card-head"><h2>Job</h2>
+        <span class="pill soft" id="job-pill"><span class="dot"></span><span id="job-name">Idle</span></span></div>
+      <div class="bar"><i id="job-bar"></i></div>
+      <pre class="log" id="job-log">No transfer has run yet.</pre>
+    </article>
   </div>
 </section>
 
-<!-- ================= ETHERNET ================= -->
-<section id="p-eth" class="panel">
-  <div class="card">
-    <h2>Ethernet link</h2>
-    <p class="lede">The MAC counters, read over JTAG. Not required for
-      transfer or inference — the JTAG loader replaces it — but this is how you
-      tell a mode problem from a protocol one.</p>
-    <div class="row">
-      <button class="go" id="btn-eth">Read counters</button>
-      <button class="go" id="btn-ethdiag">Check this PC's link</button>
-    </div>
-    <div id="eth-diag" class="verdict" hidden></div>
-    <table class="kv" id="eth-table">
-      <tbody><tr><td colspan="2" class="muted">not read yet</td></tr></tbody>
-    </table>
-    <div id="eth-verdict" class="verdict" hidden></div>
+<!-- ------------------------------ inference ------------------------------ -->
+<section class="view" id="v-run">
+  <div class="grid-2">
+    <article class="card">
+      <div class="card-head"><h2>Run</h2></div>
+      <p class="meta" id="blob-info">Model not read yet.</p>
+      <label class="field">Confidence threshold <b id="conf-val">0.25</b>
+        <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.25"></label>
+      <div class="actions">
+        <button class="primary" id="btn-run">Run on the board</button>
+        <button class="ghost" id="btn-sim">Simulate on this PC</button>
+        <button class="ghost" id="btn-float">Original model (FP32)</button>
+        <button class="danger" id="btn-abort">Abort</button>
+      </div>
+      <p class="meta">Simulate runs the bit-exact model of the NPU on the prepared frame:
+        the board must return exactly the same boxes.</p>
+      <ul class="rows" id="run-rows"></ul>
+      <div id="run-notes"></div>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Box list</h2><div class="spacer"></div>
+        <button class="ghost sm" id="btn-boxes">Read from the board</button></div>
+      <div class="tablewrap"><table class="tbl" id="box-table">
+        <thead><tr><th>Class</th><th>Confidence</th><th>x1</th><th>y1</th><th>x2</th><th>y2</th><th>Level</th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted">No boxes yet.</td></tr></tbody>
+      </table></div>
+    </article>
   </div>
 </section>
 
+<!-- ------------------------------ board ------------------------------ -->
+<section class="view" id="v-board">
+  <div class="grid-2">
+    <article class="card wide">
+      <div class="card-head"><h2>Program FPGA</h2><div class="spacer"></div>
+        <button class="primary sm" id="btn-program">Program FPGA</button></div>
+      <p class="meta">Loads the bitstream over the USB-Blaster. This resets the board:
+        SDRAM is cleared and the Ethernet link drops for a few seconds, so send the
+        model and frame afterwards.</p>
+      <label class="field">Bitstream<input id="sof-path" spellcheck="false"></label>
+      <p class="meta" id="program-out"></p>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Health checks</h2><div class="spacer"></div>
+        <button class="primary sm" id="run-all-checks">Run all checks</button></div>
+      <p class="meta">Each check depends on the one before it.</p>
+      <ol class="steps">
+        <li data-step="cable"><b>USB-Blaster and FPGA present</b><button class="ghost sm" data-act="cable">Check</button><p class="out"></p></li>
+        <li data-step="ident"><b>NPU bitstream loaded</b><button class="ghost sm" data-act="ident">Check</button><p class="out"></p></li>
+        <li data-step="memtest"><b>SDRAM write and read back</b><button class="ghost sm" data-act="memtest">Check</button><p class="out"></p></li>
+        <li data-step="regs"><b>NPU registers</b><button class="ghost sm" data-act="regs">Check</button><p class="out"></p></li>
+      </ol>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Registers</h2></div>
+      <ul class="rows" id="reg-rows"><li><span class="muted">Not read yet.</span></li></ul>
+    </article>
+
+    <article class="card wide">
+      <div class="card-head"><h2>Board LEDs and displays</h2>
+        <span class="muted sm">Lamps follow the last STATUS read, the way dvcon_status.sv drives them.</span></div>
+      <div class="board" id="board-full"></div>
+      <div class="ledguide" id="led-guide"></div>
+    </article>
+  </div>
+</section>
+
+<!-- ------------------------------ memory ------------------------------ -->
+<section class="view" id="v-mem">
+  <article class="card">
+    <div class="card-head"><h2>Memory inspector</h2></div>
+    <p class="meta">Reads SDRAM through the same JTAG window the loader writes through.</p>
+    <div class="fields">
+      <label>Address<input id="mem-addr" value="0x00000000" spellcheck="false"></label>
+      <label>Words<input id="mem-n" value="16" spellcheck="false"></label>
+      <button class="primary" id="btn-memread">Read</button>
+    </div>
+    <div class="chips">
+      <button class="chip" data-addr="0x00000000">Blob header</button>
+      <button class="chip" data-addr="0x00000100">Descriptor 0</button>
+      <button class="chip" data-addr="0x00400000">Frame</button>
+      <button class="chip" data-addr="0x00600000">Box list</button>
+      <button class="chip" data-addr="0x00800000">Feature maps</button>
+    </div>
+    <pre class="log" id="mem-out">Nothing read yet.</pre>
+    <div class="decode" id="mem-decode" hidden></div>
+  </article>
+</section>
+
+<!-- ------------------------------ ethernet ------------------------------ -->
+<section class="view" id="v-eth">
+  <div class="grid-2">
+    <article class="card">
+      <div class="card-head"><h2>FPGA MAC counters</h2><div class="spacer"></div>
+        <button class="ghost sm" id="btn-eth">Read counters</button></div>
+      <div class="kpis" id="eth-kpis"></div>
+      <p class="verdict" id="eth-verdict" hidden></p>
+    </article>
+    <article class="card">
+      <div class="card-head"><h2>This PC's link</h2><div class="spacer"></div>
+        <button class="ghost sm" id="btn-ethdiag">Check link</button></div>
+      <ul class="rows" id="eth-adapters"><li><span class="muted">Not checked yet.</span></li></ul>
+      <p class="verdict" id="eth-diag" hidden></p>
+    </article>
+  </div>
+</section>
+
+<footer id="foot-msg">Every button that talks to the board uses the USB-Blaster; one operation runs at a time.</footer>
 </main>
-
-<footer>
-  <span id="foot-msg" class="muted">Every button drives the real board over the
-    USB-Blaster. Only one cable operation runs at a time.</span>
-</footer>
-
+</div>
 <script src="/dashboard.js"></script>
 </body>
 </html>

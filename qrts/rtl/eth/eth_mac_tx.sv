@@ -1,5 +1,5 @@
 // =============================================================================
-// eth_mac_tx.sv — transmit MAC: preamble, payload, pad, FCS
+// eth_mac_tx.sv - transmit MAC: preamble, payload, pad, FCS
 //
 // Takes a frame body (destination MAC onward) and puts a legal Ethernet frame
 // on the wire:

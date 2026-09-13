@@ -1,5 +1,5 @@
 // =============================================================================
-// avalon_arbiter.sv — two Avalon-MM masters onto one SDRAM slave
+// avalon_arbiter.sv - two Avalon-MM masters onto one SDRAM slave
 //
 // The accelerator streams weights and feature maps; eth_cmd_engine writes the
 // model blob and each incoming image. Both want the same 128 MB, and the SDRAM
