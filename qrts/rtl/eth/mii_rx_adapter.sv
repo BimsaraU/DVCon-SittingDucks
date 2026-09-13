@@ -1,5 +1,5 @@
 // =============================================================================
-// mii_rx_adapter.sv — MII nibble stream -> byte stream, into the system clock
+// mii_rx_adapter.sv - MII nibble stream -> byte stream, into the system clock
 //
 // The DE2-115's ENET1 is wired for MII: 4 data bits clocked by ENET1_RX_CLK,
 // which the PHY generates at 25 MHz for 100BASE-TX (2.5 MHz at 10BASE-T). The

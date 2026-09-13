@@ -1,5 +1,5 @@
 // =============================================================================
-// sdram_ctrl.sv — Avalon-MM slave for the DE2-115's 128 MB SDRAM
+// sdram_ctrl.sv - Avalon-MM slave for the DE2-115's 128 MB SDRAM
 //
 // Quartus 25.1std ships NO SDRAM controller. Every one of them --
 // altera_avalon_new_sdram_controller, altera_sdram_tri_controller, and the

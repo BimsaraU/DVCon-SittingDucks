@@ -1,5 +1,5 @@
 // =============================================================================
-// mii_tx_adapter.sv — byte stream -> MII nibble stream, out of the system clock
+// mii_tx_adapter.sv - byte stream -> MII nibble stream, out of the system clock
 //
 // The mirror of mii_rx_adapter. eth_mac_tx produces a byte per cycle on
 // clk_sys; MII wants two nibbles per byte, low nibble first, clocked at

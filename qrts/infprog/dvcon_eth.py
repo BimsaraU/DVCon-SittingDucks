@@ -230,6 +230,7 @@ def send_file(path: Path, base: int, iface: str | None = None,
     pc = Pcap()
     name = pick_interface(pc, iface)
     pc.open(name)
+    link.set_loaded(base, False)       # LED dark until verified below
 
     nframes = (total + MAX_PAYLOAD - 1) // MAX_PAYLOAD
     t0 = time.time()
@@ -279,6 +280,8 @@ def send_file(path: Path, base: int, iface: str | None = None,
                             f"Frames were dropped; retry with --gap 50.")
         elif not v.ok:
             out["verify_error"] = v.error
+    if out["ok"]:
+        link.set_loaded(base, True)
     return out
 
 

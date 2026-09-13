@@ -217,7 +217,9 @@ def draw(frame_path: Path, boxes: list[dict], out_path: Path,
 
         cls = b.get("cls", -1)
         name = COCO[cls] if 0 <= cls < len(COCO) else f"#{cls}"
-        label = f"{name} {b.get('score', 0)}"
+        conf = b.get("conf")
+        label = f"{name} {int(round(conf * 100))}%" if conf is not None \
+            else f"{name} {b.get('score', 0)}"
         ly = y1 - 9 if y1 >= 9 else y2 + 2
         for dx in range(len(label) * 6 + 2):      # dark plate behind the text
             for dy in range(9):

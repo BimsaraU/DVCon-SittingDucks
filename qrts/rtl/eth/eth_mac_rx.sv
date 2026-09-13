@@ -1,5 +1,5 @@
 // =============================================================================
-// eth_mac_rx.sv — receive MAC: preamble strip, address filter, FCS check
+// eth_mac_rx.sv - receive MAC: preamble strip, address filter, FCS check
 //
 // Consumes the byte stream the RGMII front end produces and hands whole,
 // validated frames to eth_cmd_engine. Intel's Triple-Speed Ethernet IP is

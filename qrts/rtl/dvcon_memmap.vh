@@ -2,19 +2,19 @@
 `ifndef DVCON_MEMMAP_VH
 `define DVCON_MEMMAP_VH
 
-// model blob: 32-byte header + 181 x 64 B descriptors + weights
+// model blob: 256-byte header, 64-byte descriptors, tensor table, weights
 `define DVCON_MODEL_BASE 32'h00000000
 `define DVCON_MODEL_SIZE 32'd4194304
 // input frame, INT8 CHW 3x640x640 = 1,228,800 B
 `define DVCON_FRAME_BASE 32'h00400000
 `define DVCON_FRAME_SIZE 32'd2097152
-// box list: 300 x 16-byte records, Q12.4
+// box list: up to 300 x 16-byte records
 `define DVCON_BOXES_BASE 32'h00600000
 `define DVCON_BOXES_SIZE 32'd65536
-// feature-map arena (exporter --fmap-base)
+// feature-map arena (compiler ARENA_BASE)
 `define DVCON_ARENA_BASE 32'h00800000
 `define DVCON_ARENA_SIZE 32'd58720256
-// second frame buffer, for double buffering
+// spare frame buffer
 `define DVCON_FRAME2_BASE 32'h04000000
 `define DVCON_FRAME2_SIZE 32'd67108864
 
@@ -26,25 +26,31 @@
 `define DVCON_OP_ACK_REQ 8'h06   // reply with the 64-bit received bitmap
 `define DVCON_OP_ACK 8'h10   // FPGA -> host: the bitmap
 
-`define DVCON_REG_CTRL 6'h00  // bit0 START (self-clearing), bit1 MODE 0=GEMM 1=YOLO, bit2 ENGINE 0=sequencer 1=microcode
-`define DVCON_REG_STATUS 6'h01  // [0]busy [1]done [2]error [7:4]fsm, read-only
-`define DVCON_REG_SRC_ADDR 6'h02  // GEMM activations
-`define DVCON_REG_DST_ADDR 6'h03  // GEMM results
-`define DVCON_REG_IMG_DIM 6'h04  // {K, ARRAY_SIZE}
-`define DVCON_REG_WEIGHT_ADDR 6'h05  // weight blob base
-`define DVCON_REG_DESC_ADDR 6'h06  // descriptor table base
+`define DVCON_REG_CTRL 6'h00  // W: bit0 START, bit1 ABORT
+`define DVCON_REG_STATUS 6'h01  // [0]busy [1]done [2]error [7:4]state [10:8]conv [13:11]elem [23:16]code
+`define DVCON_REG_DESC_ADDR 6'h06  // descriptor table (blob base + header desc_off)
 `define DVCON_REG_IMG_ADDR 6'h07  // input frame base
 `define DVCON_REG_BOX_ADDR 6'h08  // box list base
-`define DVCON_REG_CONF_THRESH 6'h09  // INT8 confidence threshold
+`define DVCON_REG_CONF_THRESH 6'h09  // signed Q8.8 logit threshold
 `define DVCON_REG_NUM_BOXES 6'h0A  // boxes written by the last frame, read-only
-`define DVCON_REG_LAYER_IDX 6'h0B  // which descriptor is executing, read-only
-`define DVCON_REG_IDENT 6'h0C  // {8'hDC, ARRAY_SIZE, build id}, read-only
+`define DVCON_REG_LAYER_IDX 6'h0B  // descriptor index being executed, read-only
+`define DVCON_REG_IDENT 6'h0C  // 0xDC10_vvvv: magic, array edge, version, read-only
+`define DVCON_REG_CYCLES 6'h0D  // clock cycles of the current or last run
+`define DVCON_REG_SLOTS 6'h0E  // pixel slots through the systolic array
+`define DVCON_REG_DMA_WORDS 6'h0F  // 32-bit words moved to and from SDRAM
+`define DVCON_REG_TAG 6'h10  // model layer of the current descriptor
+`define DVCON_REG_OP 6'h11  // opcode and flags of the current descriptor
+`define DVCON_REG_FLAGS 6'h12  // [0] model loaded [1] frame loaded (host sets, reset clears)
+`define DVCON_REG_DBG_ARB 6'h2F  // unused (0)
+`define DVCON_REG_DBG_EE 6'h30  // unused (0)
+`define DVCON_REG_DBG_CV1 6'h31  // NPU box count
+`define DVCON_REG_DBG_CV0 6'h32  // NPU live state: phases, op, state, busy, array, dma
 `define DVCON_REG_SD_TAP 6'h33  // SDRAM read capture tap 0..3 (write)
-`define DVCON_REG_DBG_DSEL 6'h34  // which descriptor word to read back (write)
-`define DVCON_REG_DBG_DVAL 6'h35  // desc[DSEL] as the sequencer latched it
+`define DVCON_REG_DBG_DSEL 6'h34  // unused
+`define DVCON_REG_DBG_DVAL 6'h35  // unused (0)
 `define DVCON_REG_ETH_DROP 6'h36  // words the ethernet write queue could not accept
-`define DVCON_REG_DBG_SRC 6'h37  // conv src address the sequencer decoded
-`define DVCON_REG_DBG_DST 6'h38  // conv dst address the sequencer decoded
+`define DVCON_REG_DBG_SRC 6'h37  // NPU layer tag
+`define DVCON_REG_DBG_DST 6'h38  // NPU descriptor index
 `define DVCON_REG_ETH_FILT 6'h39  // good FCS but addressed to someone else
 `define DVCON_REG_ETH_GOOD 6'h3A  // ethernet frames with a good FCS
 `define DVCON_REG_ETH_BAD 6'h3B  // ethernet frames that failed FCS

@@ -1,5 +1,5 @@
 // =============================================================================
-// jtag_ctrl.sv — host control of the accelerator over JTAG
+// jtag_ctrl.sv - host control of the accelerator over JTAG
 //
 // Replaces the boot sequencer that used to sit in dvcon_top hardcoding four
 // addresses and a START. The host drives registers, starts a frame, polls

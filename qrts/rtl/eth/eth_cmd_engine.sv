@@ -1,5 +1,5 @@
 // =============================================================================
-// eth_cmd_engine.sv — parses command frames and DMAs their payload into SDRAM
+// eth_cmd_engine.sv - parses command frames and DMAs their payload into SDRAM
 //
 // This is the bulk-data path. The host sends the 2.8 MB model blob once at
 // startup and a 1.2 MB image bitmap per frame; both arrive as a stream of

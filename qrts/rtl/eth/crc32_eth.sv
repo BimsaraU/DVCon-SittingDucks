@@ -1,5 +1,5 @@
 // =============================================================================
-// crc32_eth.sv — byte-serial Ethernet FCS (CRC-32/ISO-HDLC)
+// crc32_eth.sv - byte-serial Ethernet FCS (CRC-32/ISO-HDLC)
 //
 // Shared by eth_mac_rx (to check the received FCS) and eth_mac_tx (to append
 // one). Ethernet's CRC is the standard reflected CRC-32:
